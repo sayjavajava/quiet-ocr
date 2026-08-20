@@ -11,10 +11,12 @@
   "type": "module",
   "scripts": {
     "build": "node scripts/copy-vendor-assets.mjs",
-    "serve": "npm run build && python3 -m http.server 8080 -d public"
+    "serve": "npm run build && node scripts/serve.mjs",
+    "verify": "node scripts/verify.mjs"
   },
   "devDependencies": {
     "@tesseract.js-data/eng": "1.0.0",
+    "playwright": "^1.62.1",
     "tesseract.js": "^7.0.0"
   }
 }
