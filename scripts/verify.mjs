@@ -471,6 +471,61 @@ try {
     await context.close();
   }
 
+  // --- Mixed batch: an image and a PDF selected together in one run, not
+  // tested anywhere else — every other batch test uses all-images or a
+  // single PDF. Confirms the image and the PDF's rendered pages coexist
+  // correctly in the same selectedFiles/fileGroups pipeline, and that the
+  // image gets its own single-page .docx alongside the PDF's own
+  // multi-page .docx in the resulting .zip. ---
+  {
+    console.log(`\n=== mixed batch: one image + one PDF together ===`);
+    const invoiceFixture = manifest.find((f) => f.name === "sample-invoice");
+    const pdfFixture = manifest.find((f) => f.name === "sample-multipage");
+    const context = await browser.newContext();
+    const page = await context.newPage();
+    page.on("pageerror", (e) => console.error("[pageerror]", String(e)));
+
+    await page.goto(`${origin}/index.html`, { waitUntil: "load" });
+    await page.setInputFiles("#file-input", [`${FIXTURE_DIR}${invoiceFixture.file}`, `${FIXTURE_DIR}${pdfFixture.file}`]);
+    await page.waitForFunction(() => !document.getElementById("run").disabled, { timeout: 20000 });
+
+    const namesAfterRender = await page.$$eval("#file-list .file-name", (els) => els.map((e) => e.textContent));
+    const runLabel = await page.textContent("#run");
+
+    await page.click("#run");
+    await page.waitForFunction(() => document.getElementById("status").textContent === "Done.", { timeout: 30000 });
+    const preview = await page.inputValue("#result");
+
+    const label = await page.textContent("#download");
+    const [download] = await Promise.all([page.waitForEvent("download"), page.click("#download")]);
+    const zipBytes = new Uint8Array(readFileSync(await download.path()));
+    const entries = unzipSync(zipBytes);
+    const names = Object.keys(entries).sort();
+    const pdfDocxBreaks = entries["sample-multipage.docx"]
+      ? (strFromU8(unzipSync(entries["sample-multipage.docx"])["word/document.xml"]).match(/<w:pageBreakBefore\/>/g) || []).length
+      : -1;
+
+    console.log(`File list: ${JSON.stringify(namesAfterRender)}`);
+    console.log(`Zip entries: ${JSON.stringify(names)}`);
+
+    const ok = namesAfterRender.length === 4 // 1 image + 3 PDF pages
+      && namesAfterRender[0] === invoiceFixture.file
+      && runLabel === "Run OCR on 4 images"
+      && preview.includes(invoiceFixture.expectedText)
+      && pdfFixture.expectedPages.every((p) => preview.includes(p))
+      && label === "Download .zip"
+      && names.length === 2 && names.includes("sample-invoice.docx") && names.includes("sample-multipage.docx")
+      && readDocxText(entries["sample-invoice.docx"]).includes(invoiceFixture.expectedText)
+      && pdfDocxBreaks === pdfFixture.expectedPages.length - 1;
+    if (!ok) {
+      console.error("✗ FAILED: a mixed image+PDF batch didn't behave as expected.");
+      failed = true;
+    } else {
+      console.log("✓ Image and PDF coexisted correctly through recognition and export: 2 .docx files, one per original file.");
+    }
+    await context.close();
+  }
+
   // --- Race conditions: real UI state can be manipulated faster than a
   // single run's async flow, and the fixes for these were found by actually
   // reproducing the bugs first, not by inspection alone. ---
