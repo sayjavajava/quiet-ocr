@@ -28,7 +28,7 @@ function clearPreviewUrls() {
 }
 
 function renderFileList() {
-  fileList.innerHTML = '';
+  fileList.replaceChildren();
   for (const file of selectedFiles) {
     const url = URL.createObjectURL(file);
     previewUrls.push(url);
