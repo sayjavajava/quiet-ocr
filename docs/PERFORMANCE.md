@@ -37,10 +37,11 @@ canvases the accuracy fixtures use.
 ## Takeaways
 
 - **Engine load is ~500ms and flat**, independent of image content — this is the real,
-  current cost of creating a fresh worker per run. Worker pooling (reusing one worker
-  across multiple recognitions in a session) would remove this cost for every run after
-  the first, and is the natural next step if usage patterns show people running multiple
-  images per visit.
+  current cost of creating a fresh worker per run. As of the multi-image batch feature,
+  a single "Run OCR" click on N selected images creates one worker and reuses it across
+  all N `recognize()` calls, so this ~500ms is paid once per batch, not once per image —
+  confirmed by `scripts/verify.mjs`'s batch check, which asserts both images in a
+  2-image batch complete and are individually labelled in the output.
 - **Recognize() time scales with content, not just pixel count.** `table` (700×260px, dense
   monospace text) takes longer than `sample-invoice` despite being a similarly small image,
   because there's more text to recognize.

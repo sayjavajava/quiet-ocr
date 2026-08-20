@@ -123,6 +123,54 @@ try {
     await context.close();
   }
 
+  // --- batch mode: multiple files selected and run together, not just one
+  // fixture at a time. Proves the multi-file UI actually produces per-file,
+  // labelled output through the real page, not just "the loop ran twice". ---
+  {
+    console.log(`\n=== batch (sample-invoice + table) ===`);
+    const invoiceFixture = manifest.find((f) => f.name === "sample-invoice");
+    const tableFixture = manifest.find((f) => f.name === "table");
+    const batchPaths = [`${FIXTURE_DIR}${invoiceFixture.file}`, `${FIXTURE_DIR}${tableFixture.file}`];
+
+    const context = await browser.newContext();
+    const page = await context.newPage();
+    const requests = [];
+    page.on("request", (r) => requests.push({ url: r.url(), postDataLength: (r.postData() || "").length }));
+    page.on("pageerror", (e) => console.error("[pageerror]", String(e)));
+
+    await page.goto(`${origin}/index.html`, { waitUntil: "load" });
+    await page.setInputFiles("#file-input", batchPaths);
+    await page.click("#run");
+    await page.waitForFunction(
+      () => document.getElementById("status").textContent === "Done." ||
+        /^Error:/.test(document.getElementById("status").textContent),
+      { timeout: 90000 },
+    );
+
+    const status = await page.textContent("#status");
+    const recognized = await page.inputValue("#result");
+    const fileStatuses = await page.$$eval("#file-list .file-status", (els) => els.map((e) => e.textContent));
+    console.log(`Status: ${status}`);
+    console.log(`Per-file statuses: ${JSON.stringify(fileStatuses)}`);
+
+    const hasInvoiceSection = recognized.includes(`=== ${invoiceFixture.file} ===`);
+    const hasTableSection = recognized.includes(`=== ${tableFixture.file} ===`);
+    const invoiceTextPresent = recognized.includes(invoiceFixture.expectedText);
+    const tableWordsPresent = ["Widget A", "Widget B", "Widget C"].every((w) => recognized.includes(w));
+    const bothDone = fileStatuses.length === 2 && fileStatuses.every((s) => s === "Done");
+
+    if (status !== "Done." || !hasInvoiceSection || !hasTableSection || !invoiceTextPresent || !tableWordsPresent || !bothDone) {
+      console.error("✗ FAILED: batch run did not produce the expected per-file, labelled output.");
+      console.error(`  status==="Done.": ${status === "Done."}, invoice section: ${hasInvoiceSection}, table section: ${hasTableSection}, invoice text: ${invoiceTextPresent}, table words: ${tableWordsPresent}, per-file "Done": ${bothDone}`);
+      failed = true;
+    } else {
+      console.log("✓ Batch run recognized both images and labelled each result by filename.");
+    }
+
+    allRequests.push(...requests);
+    await context.close();
+  }
+
   // Every request across every fixture run must be same-origin (this
   // server) or a blob: URL (an in-memory object reference that never
   // leaves the browser process — not a network request to anywhere).
