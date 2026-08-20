@@ -23,8 +23,15 @@
 import { chromium } from "playwright";
 import { readFileSync, existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
+import { unzipSync, strFromU8 } from "fflate";
 import { startServer } from "./serve.mjs";
 import { wordAccuracy, parseLabelledBlocks } from "./text-accuracy.mjs";
+
+/** A .docx is itself a zip; pull its main body XML and strip tags to check content. */
+function readDocxText(docxBytes) {
+  const xml = strFromU8(unzipSync(docxBytes)["word/document.xml"]);
+  return xml.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
+}
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const PUBLIC_DIR = `${ROOT}public`;
@@ -247,6 +254,111 @@ try {
       console.log(`✓ Dialog fired ("${dialogMessage}") and dismissing it left the run un-started.`);
     }
 
+    await context.close();
+  }
+
+  // --- Word-document export: the actual downloaded file, not just the
+  // on-screen preview text, is what users take away — verify the real
+  // bytes Playwright captures from a real download event, not just that
+  // the button exists. Three shapes: single image -> one .docx; multiple
+  // images -> one .zip of several .docx; a multi-page PDF -> one .docx
+  // with real OOXML page breaks between pages, not just paragraph breaks. ---
+  {
+    console.log(`\n=== docx export: single image ===`);
+    const invoiceFixture = manifest.find((f) => f.name === "sample-invoice");
+    const context = await browser.newContext();
+    const page = await context.newPage();
+    page.on("pageerror", (e) => console.error("[pageerror]", String(e)));
+
+    await page.goto(`${origin}/index.html`, { waitUntil: "load" });
+    await page.setInputFiles("#file-input", `${FIXTURE_DIR}${invoiceFixture.file}`);
+    await page.click("#run");
+    await page.waitForFunction(() => document.getElementById("status").textContent === "Done.", { timeout: 60000 });
+
+    const label = await page.textContent("#download");
+    const [download] = await Promise.all([page.waitForEvent("download"), page.click("#download")]);
+    const bytes = new Uint8Array(readFileSync(await download.path()));
+    const text = readDocxText(bytes);
+
+    const ok = label === "Download .docx"
+      && download.suggestedFilename() === "sample-invoice.docx"
+      && bytes[0] === 0x50 && bytes[1] === 0x4b // "PK" — a .docx is a zip
+      && text.includes(invoiceFixture.expectedText);
+    console.log(`Filename: ${download.suggestedFilename()}, text: ${JSON.stringify(text)}`);
+    if (!ok) {
+      console.error("✗ FAILED: single-image .docx export didn't produce the expected file/content.");
+      failed = true;
+    } else {
+      console.log("✓ Single image downloads as a correctly-named .docx with the recognized text.");
+    }
+    await context.close();
+  }
+
+  {
+    console.log(`\n=== docx export: two images -> .zip ===`);
+    const invoiceFixture = manifest.find((f) => f.name === "sample-invoice");
+    const tableFixture = manifest.find((f) => f.name === "table");
+    const context = await browser.newContext();
+    const page = await context.newPage();
+    page.on("pageerror", (e) => console.error("[pageerror]", String(e)));
+
+    await page.goto(`${origin}/index.html`, { waitUntil: "load" });
+    await page.setInputFiles("#file-input", [`${FIXTURE_DIR}${invoiceFixture.file}`, `${FIXTURE_DIR}${tableFixture.file}`]);
+    await page.click("#run");
+    await page.waitForFunction(() => document.getElementById("status").textContent === "Done.", { timeout: 60000 });
+
+    const label = await page.textContent("#download");
+    const [download] = await Promise.all([page.waitForEvent("download"), page.click("#download")]);
+    const zipBytes = new Uint8Array(readFileSync(await download.path()));
+    const entries = unzipSync(zipBytes);
+    const names = Object.keys(entries).sort();
+
+    const ok = label === "Download .zip"
+      && download.suggestedFilename() === "ocr-results.zip"
+      && names.length === 2 && names.includes("sample-invoice.docx") && names.includes("table.docx")
+      && readDocxText(entries["sample-invoice.docx"]).includes(invoiceFixture.expectedText)
+      && readDocxText(entries["table.docx"]).includes("Widget A");
+    console.log(`Zip entries: ${JSON.stringify(names)}`);
+    if (!ok) {
+      console.error("✗ FAILED: multi-image .zip export didn't produce the expected files/content.");
+      failed = true;
+    } else {
+      console.log("✓ Two images download as a .zip containing two correctly-named, correctly-contented .docx files.");
+    }
+    await context.close();
+  }
+
+  {
+    console.log(`\n=== docx export: multi-page PDF -> one .docx with real page breaks ===`);
+    const pdfFixture = manifest.find((f) => f.name === "sample-multipage");
+    const context = await browser.newContext();
+    const page = await context.newPage();
+    page.on("pageerror", (e) => console.error("[pageerror]", String(e)));
+
+    await page.goto(`${origin}/index.html`, { waitUntil: "load" });
+    await page.setInputFiles("#file-input", `${FIXTURE_DIR}${pdfFixture.file}`);
+    await page.waitForFunction(() => !document.getElementById("run").disabled, { timeout: 20000 });
+    await page.click("#run");
+    await page.waitForFunction(() => document.getElementById("status").textContent === "Done.", { timeout: 60000 });
+
+    const label = await page.textContent("#download");
+    const [download] = await Promise.all([page.waitForEvent("download"), page.click("#download")]);
+    const bytes = new Uint8Array(readFileSync(await download.path()));
+    const xml = strFromU8(unzipSync(bytes)["word/document.xml"]);
+    const pageBreaks = (xml.match(/<w:pageBreakBefore\/>/g) || []).length;
+    const text = readDocxText(bytes);
+
+    const ok = label === "Download .docx"
+      && download.suggestedFilename() === `${pdfFixture.file.replace(/\.pdf$/, "")}.docx`
+      && pageBreaks === pdfFixture.expectedPages.length - 1
+      && pdfFixture.expectedPages.every((p) => text.includes(p));
+    console.log(`Page breaks: ${pageBreaks} (expected ${pdfFixture.expectedPages.length - 1}), text: ${JSON.stringify(text)}`);
+    if (!ok) {
+      console.error("✗ FAILED: PDF -> single multi-page .docx export didn't produce the expected file/content.");
+      failed = true;
+    } else {
+      console.log("✓ A multi-page PDF downloads as one .docx with a real page break between each page.");
+    }
     await context.close();
   }
 
