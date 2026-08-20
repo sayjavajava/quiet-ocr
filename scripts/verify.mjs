@@ -362,6 +362,116 @@ try {
     await context.close();
   }
 
+  // --- Race conditions: real UI state can be manipulated faster than a
+  // single run's async flow, and the fixes for these were found by actually
+  // reproducing the bugs first, not by inspection alone. ---
+  {
+    console.log(`\n=== race: mid-run reselection doesn't corrupt the running batch ===`);
+    const invoiceFixture = manifest.find((f) => f.name === "sample-invoice");
+    const tableFixture = manifest.find((f) => f.name === "table");
+    const paragraphFixture = manifest.find((f) => f.name === "paragraph");
+    const context = await browser.newContext();
+    const page = await context.newPage();
+    page.on("pageerror", (e) => console.error("[pageerror]", String(e)));
+
+    await page.goto(`${origin}/index.html`, { waitUntil: "load" });
+    await page.setInputFiles("#file-input", [
+      `${FIXTURE_DIR}${invoiceFixture.file}`,
+      `${FIXTURE_DIR}${tableFixture.file}`,
+      `${FIXTURE_DIR}${paragraphFixture.file}`,
+    ]);
+    await page.click("#run");
+    await page.waitForFunction(() => document.getElementById("status").textContent.startsWith("Recognizing"), { timeout: 20000 });
+    const disabledMidRun = await page.$eval("#file-input", (el) => el.disabled);
+
+    // setInputFiles bypasses the native disabled-input block entirely (it
+    // sets .files and dispatches change() directly, not via a simulated
+    // click on the picker) — this is deliberately the harder case, testing
+    // the isRunning guard specifically, not just the disabled attribute.
+    await page.setInputFiles("#file-input", `${FIXTURE_DIR}${invoiceFixture.file}`);
+    await page.waitForTimeout(200);
+    const runStillDisabled = await page.$eval("#run", (el) => el.disabled);
+
+    await page.waitForFunction(() => document.getElementById("status").textContent === "Done.", { timeout: 30000 });
+    const names = await page.$$eval("#file-list .file-name", (els) => els.map((e) => e.textContent));
+    const result = await page.inputValue("#result");
+
+    const ok = disabledMidRun && runStillDisabled && names.length === 3
+      && result.includes(invoiceFixture.file) && result.includes(tableFixture.file) && result.includes(paragraphFixture.file);
+    console.log(`fileInput.disabled mid-run: ${disabledMidRun}, run.disabled after forced reselect: ${runStillDisabled}, file-list after: ${JSON.stringify(names)}`);
+    if (!ok) {
+      console.error("✗ FAILED: a mid-run reselection attempt corrupted or truncated the in-flight run.");
+      failed = true;
+    } else {
+      console.log("✓ Original 3-file run completed uncorrupted; the mid-run reselection attempt was ignored.");
+    }
+    await context.close();
+  }
+
+  {
+    console.log(`\n=== race: synchronous double-click on Run starts only one recognition ===`);
+    const invoiceFixture = manifest.find((f) => f.name === "sample-invoice");
+    const context = await browser.newContext();
+    const page = await context.newPage();
+    page.on("pageerror", (e) => console.error("[pageerror]", String(e)));
+
+    await page.goto(`${origin}/index.html`, { waitUntil: "load" });
+    let createWorkerCalls = 0;
+    await page.exposeFunction("__countCreateWorker", () => { createWorkerCalls += 1; });
+    await page.evaluate(() => {
+      const original = Tesseract.createWorker;
+      Tesseract.createWorker = (...args) => { window.__countCreateWorker(); return original(...args); };
+    });
+    await page.setInputFiles("#file-input", `${FIXTURE_DIR}${invoiceFixture.file}`);
+    // Two .click() calls in one synchronous script — the real test of
+    // whether the handler's lock (isRunning set before anything else,
+    // including before the large-batch confirm() dialog) actually holds.
+    // A Promise.all() of two separate page.click() calls is NOT an
+    // equivalent test: Playwright's own click machinery has enough
+    // latency that the two land seconds apart, well after the first run
+    // already finished — that looked like a failure on first attempt and
+    // was actually a test-methodology bug, not an app bug; caught by
+    // logging real event timestamps before trusting the result.
+    await page.evaluate(() => {
+      const btn = document.getElementById('run');
+      btn.click();
+      btn.click();
+    });
+    await page.waitForFunction(() => document.getElementById("status").textContent === "Done.", { timeout: 30000 });
+
+    console.log(`Tesseract.createWorker call count: ${createWorkerCalls}`);
+    if (createWorkerCalls !== 1) {
+      console.error("✗ FAILED: a synchronous double-click started more than one recognition run.");
+      failed = true;
+    } else {
+      console.log("✓ Only one recognition run started.");
+    }
+    await context.close();
+  }
+
+  {
+    console.log(`\n=== race: Download is structurally inaccessible during an active run ===`);
+    const invoiceFixture = manifest.find((f) => f.name === "sample-invoice");
+    const context = await browser.newContext();
+    const page = await context.newPage();
+    page.on("pageerror", (e) => console.error("[pageerror]", String(e)));
+
+    await page.goto(`${origin}/index.html`, { waitUntil: "load" });
+    await page.setInputFiles("#file-input", `${FIXTURE_DIR}${invoiceFixture.file}`);
+    await page.click("#run");
+    await page.waitForFunction(() => document.getElementById("status").textContent.startsWith("Recognizing"), { timeout: 20000 });
+    const resultSectionHiddenMidRun = await page.$eval("#result-section", (el) => el.hidden);
+    await page.waitForFunction(() => document.getElementById("status").textContent === "Done.", { timeout: 30000 });
+
+    if (!resultSectionHiddenMidRun) {
+      console.error("✗ FAILED: the result/download section was visible during an active run.");
+      failed = true;
+    } else {
+      console.log("✓ Download button is inaccessible (parent section hidden) for the duration of a run.");
+    }
+    await context.close();
+  }
+
   // Every request across every fixture run must be same-origin (this
   // server) or a blob: URL (an in-memory object reference that never
   // leaves the browser process — not a network request to anywhere).

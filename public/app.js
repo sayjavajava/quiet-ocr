@@ -31,6 +31,13 @@ let fileGroups = [];
 let docxOutputs = []; // `{ name, blob }[]`, rebuilt after every run
 let previewUrls = [];
 let worker = null;
+// Belt-and-suspenders alongside fileInput.disabled: that attribute stops a
+// real user from reopening the picker mid-run, but doesn't stop a change
+// event fired by any other means (a testing tool driving the DOM directly,
+// e.g.) from still reaching this handler and reassigning selectedFiles out
+// from under the running loop below. This flag is checked regardless of how
+// the event arrived.
+let isRunning = false;
 
 // A batch above this size gets a confirmation with a time estimate before
 // starting, rather than silently kicking off a multi-minute run on one
@@ -108,6 +115,7 @@ function buildCombinedText(results) {
 }
 
 fileInput.addEventListener('change', async () => {
+  if (isRunning) return;
   clearPreviewUrls();
   const rawFiles = Array.from(fileInput.files ?? []);
   resultSection.hidden = true;
@@ -158,7 +166,17 @@ fileInput.addEventListener('change', async () => {
 });
 
 runButton.addEventListener('click', async () => {
-  if (selectedFiles.length === 0) return;
+  if (selectedFiles.length === 0 || isRunning) return;
+
+  // Locked as the very first thing this handler does, with nothing —
+  // not even the confirm() dialog below — between the guard check above
+  // and the lock. A real double-click (or two near-simultaneous
+  // programmatic clicks) can reach this listener twice before the first
+  // invocation's own synchronous prefix has fully run; reproduced directly
+  // (two Tesseract workers got created from one rapid double-click) before
+  // this ordering fix — see scripts/verify.mjs's race-condition checks.
+  isRunning = true;
+  runButton.disabled = true;
 
   if (selectedFiles.length > LARGE_BATCH_THRESHOLD) {
     const estimate = formatEstimate(estimateRunSeconds(selectedFiles.length));
@@ -166,10 +184,18 @@ runButton.addEventListener('click', async () => {
       `This will run OCR on ${selectedFiles.length} pages/images, estimated ${estimate}. ` +
       `There's no pause or cancel once it starts. Continue?`
     );
-    if (!proceed) return;
+    if (!proceed) {
+      isRunning = false;
+      runButton.disabled = false;
+      return;
+    }
   }
 
-  runButton.disabled = true;
+  // A new selection mid-run would reassign selectedFiles/fileGroups out
+  // from under the loop below — silently truncating it, and pairing the
+  // wrong file's recognized text with the wrong filename in the .docx
+  // export.
+  fileInput.disabled = true;
   resultSection.hidden = true;
   statusEl.textContent = 'Loading OCR engine…';
 
@@ -249,6 +275,8 @@ runButton.addEventListener('click', async () => {
       await worker.terminate();
       worker = null;
     }
+    isRunning = false;
+    fileInput.disabled = false;
     runButton.disabled = false;
   }
 });
