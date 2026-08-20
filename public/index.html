@@ -5,38 +5,62 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>QuietOCR</title>
   <meta name="description" content="OCR that runs entirely in your browser. Nothing you scan is ever uploaded." />
+  <link rel="stylesheet" href="vendor/fonts.css" />
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
+  <div class="bg-glow" aria-hidden="true"></div>
+
   <main>
-    <h1>QuietOCR</h1>
+    <header class="top">
+      <div class="wordmark">
+        <span class="mark">Q</span>
+        <span class="name">Quiet<span>OCR</span></span>
+      </div>
+      <p class="status-pill"><span class="dot"></span> Never Uploaded</p>
+    </header>
+
+    <p class="eyebrow">✦ Client-Side OCR</p>
+
+    <h1>Pull text out of<br><span class="grad">images or PDFs.</span></h1>
+
     <p class="tagline">
-      Pull text out of images or PDFs, entirely in your browser. This page loads its own code from
-      the network — but once it has, your file is never uploaded anywhere. Recognition runs
-      locally, in WebAssembly, on your machine.
+      This page loads its own code from the network — but once it has, your file is
+      <strong>never uploaded anywhere</strong>. Recognition runs locally, in WebAssembly, on your
+      machine.
     </p>
 
-    <div class="picker">
+    <div class="picker glass">
+      <div class="picker-icon" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 16V4M12 4l-4 4M12 4l4 4"/><path d="M4 16v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/></svg>
+      </div>
+      <label for="file-input" class="picker-title">Choose image(s) or PDF(s)</label>
+      <p class="picker-hint">PNG · JPEG · WebP · BMP · PDF</p>
+      <label for="file-input" class="btn-primary picker-btn">Choose Files</label>
       <input
         type="file"
         id="file-input"
+        class="visually-hidden"
         accept="image/png,image/jpeg,image/webp,image/bmp,application/pdf"
         multiple
       />
-      <label for="file-input">Choose image(s) or PDF(s)</label>
     </div>
 
-    <ul id="file-list" hidden></ul>
+    <ul id="file-list" class="glass" hidden></ul>
 
-    <button id="run" disabled>Run OCR</button>
+    <button id="run" class="btn-primary btn-block" disabled>Run OCR</button>
 
     <p id="status" role="status" aria-live="polite"></p>
 
     <section id="result-section" hidden>
-      <h2>Recognized text</h2>
-      <textarea id="result" readonly rows="10"></textarea>
-      <button id="copy">Copy text</button>
-      <button id="download">Download .txt</button>
+      <p class="section-label">Recognized text</p>
+      <div class="glass result-panel">
+        <textarea id="result" readonly rows="10"></textarea>
+        <div class="result-actions">
+          <button id="copy" class="btn-ghost">Copy text</button>
+          <button id="download" class="btn-ghost">Download .txt</button>
+        </div>
+      </div>
     </section>
 
     <footer>
