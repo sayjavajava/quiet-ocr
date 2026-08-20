@@ -10,7 +10,7 @@ import { chromium } from "playwright";
 import { readFileSync, existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { startServer } from "./serve.mjs";
-import { wordAccuracy } from "./text-accuracy.mjs";
+import { wordAccuracy, parseLabelledBlocks } from "./text-accuracy.mjs";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const PUBLIC_DIR = `${ROOT}public`;
@@ -40,15 +40,25 @@ for (const fixture of manifest) {
       /^Error:/.test(document.getElementById("status").textContent),
     { timeout: 60000 },
   );
-  const recognized = (await page.inputValue("#result")).trim();
-  const accuracy = wordAccuracy(fixture.expectedText, recognized);
-
   console.log(`\n=== ${fixture.name} (${fixture.mode}) ===`);
-  console.log("Expected: ", JSON.stringify(fixture.expectedText));
-  console.log("Recognized:", JSON.stringify(recognized));
-  console.log(`Word accuracy: ${(accuracy * 100).toFixed(1)}%`);
-  if (fixture.mode === "exact") {
-    console.log(recognized === fixture.expectedText ? "✓ exact match" : "✗ NOT an exact match");
+
+  if (fixture.mode === "pdf-word-accuracy") {
+    const recognized = await page.inputValue("#result");
+    const blocks = parseLabelledBlocks(recognized);
+    fixture.expectedPages.forEach((expectedText, i) => {
+      const text = (blocks[i]?.text ?? "").trim();
+      const accuracy = wordAccuracy(expectedText, text);
+      console.log(`  page ${i + 1}: ${(accuracy * 100).toFixed(1)}% | expected: ${JSON.stringify(expectedText)} | recognized: ${JSON.stringify(text)}`);
+    });
+  } else {
+    const recognized = (await page.inputValue("#result")).trim();
+    const accuracy = wordAccuracy(fixture.expectedText, recognized);
+    console.log("Expected: ", JSON.stringify(fixture.expectedText));
+    console.log("Recognized:", JSON.stringify(recognized));
+    console.log(`Word accuracy: ${(accuracy * 100).toFixed(1)}%`);
+    if (fixture.mode === "exact") {
+      console.log(recognized === fixture.expectedText ? "✓ exact match" : "✗ NOT an exact match");
+    }
   }
   await page.close();
 }

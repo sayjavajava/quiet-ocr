@@ -24,7 +24,7 @@ import { chromium } from "playwright";
 import { readFileSync, existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { startServer } from "./serve.mjs";
-import { wordAccuracy } from "./text-accuracy.mjs";
+import { wordAccuracy, parseLabelledBlocks } from "./text-accuracy.mjs";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const PUBLIC_DIR = `${ROOT}public`;
@@ -42,6 +42,11 @@ const THRESHOLDS = {
   table: 0.85,
   // measured 92.5% at 6° rotation / seed 20260820 / +/-85 noise / 1.1px blur
   "noisy-scan": 0.8,
+  // measured 100% per page at 150/200/300 DPI (see docs/PERFORMANCE.md's
+  // PDF input section) — this fixture is clean vector text, so it doesn't
+  // differentiate DPI choices; it exists to regression-test the render
+  // pipeline itself (PDF -> N page images -> OCR), not to stress accuracy.
+  "sample-multipage": 0.9,
 };
 
 if (!existsSync(`${PUBLIC_DIR}/vendor/tesseract.min.js`)) {
@@ -83,6 +88,9 @@ try {
 
     await page.goto(`${origin}/index.html`, { waitUntil: "load" });
     await page.setInputFiles("#file-input", fixturePath);
+    // click() auto-waits for #run to become enabled — for a PDF fixture
+    // that's not immediate: the change handler renders every page (see
+    // pdf-to-images.js) before Run is enabled at all.
     await page.click("#run");
     await page.waitForFunction(
       () => document.getElementById("status").textContent === "Done." ||
@@ -94,6 +102,31 @@ try {
     if (status.startsWith("Error:")) {
       console.error(`✗ FAILED: page reported ${status}`);
       failed = true;
+    } else if (fixture.mode === "pdf-word-accuracy") {
+      const recognized = await page.inputValue("#result");
+      const pageNames = await page.$$eval("#file-list .file-name", (els) => els.map((e) => e.textContent));
+      const blocks = parseLabelledBlocks(recognized);
+      console.log(`Rendered pages: ${JSON.stringify(pageNames)}`);
+
+      if (pageNames.length !== fixture.expectedPages.length || blocks.length !== fixture.expectedPages.length) {
+        console.error(`✗ FAILED: expected ${fixture.expectedPages.length} rendered pages, got ${pageNames.length} (${blocks.length} labelled blocks).`);
+        failed = true;
+      } else {
+        const threshold = THRESHOLDS[fixture.name];
+        let allOk = true;
+        fixture.expectedPages.forEach((expectedText, i) => {
+          const accuracy = wordAccuracy(expectedText, blocks[i].text);
+          const ok = accuracy >= threshold;
+          allOk &&= ok;
+          console.log(`  page ${i + 1}: ${(accuracy * 100).toFixed(1)}% ${ok ? "✓" : "✗"} — ${JSON.stringify(blocks[i].text.trim())}`);
+        });
+        if (!allOk) {
+          console.error("✗ FAILED: at least one PDF page's word accuracy is below threshold.");
+          failed = true;
+        } else {
+          console.log("✓ Every rendered page meets its word-accuracy threshold.");
+        }
+      }
     } else {
       const recognized = (await page.inputValue("#result")).trim();
       console.log(`Expected:   ${JSON.stringify(fixture.expectedText)}`);

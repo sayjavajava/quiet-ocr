@@ -11,14 +11,19 @@
   <main>
     <h1>QuietOCR</h1>
     <p class="tagline">
-      Pull text out of an image, entirely in your browser. This page loads its own code from the
-      network — but once it has, your image is never uploaded anywhere. Recognition runs locally,
-      in WebAssembly, on your machine.
+      Pull text out of images or PDFs, entirely in your browser. This page loads its own code from
+      the network — but once it has, your file is never uploaded anywhere. Recognition runs
+      locally, in WebAssembly, on your machine.
     </p>
 
     <div class="picker">
-      <input type="file" id="file-input" accept="image/png,image/jpeg,image/webp,image/bmp" multiple />
-      <label for="file-input">Choose image(s)</label>
+      <input
+        type="file"
+        id="file-input"
+        accept="image/png,image/jpeg,image/webp,image/bmp,application/pdf"
+        multiple
+      />
+      <label for="file-input">Choose image(s) or PDF(s)</label>
     </div>
 
     <ul id="file-list" hidden></ul>
@@ -46,6 +51,6 @@
   </main>
 
   <script src="vendor/tesseract.min.js"></script>
-  <script src="app.js"></script>
+  <script type="module" src="app.js"></script>
 </body>
 </html>

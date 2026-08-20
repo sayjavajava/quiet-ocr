@@ -1,10 +1,13 @@
 // QuietOCR — runs Tesseract (via WebAssembly) entirely in the browser.
-// Images never leave this page: they're read into memory from the
-// <input type="file">, handed straight to the OCR engine, and nothing
-// derived from them is ever sent anywhere. The only network requests this
-// page makes are for its own code (tesseract.min.js, worker.min.js, the
-// WASM core, and the trained-data file) — all same-origin, from
-// public/vendor/, not a third-party CDN.
+// Images and PDFs never leave this page: they're read into memory from the
+// <input type="file">, handed straight to the OCR engine (PDFs are
+// rasterized to page images first, entirely client-side — see
+// pdf-to-images.js), and nothing derived from them is ever sent anywhere.
+// The only network requests this page makes are for its own code
+// (tesseract.min.js, worker.min.js, the WASM core, the trained-data file,
+// and pdf.js) — all same-origin, from public/vendor/, not a third-party CDN.
+
+import { pdfToImageFiles, isPdfFile } from './pdf-to-images.js';
 
 const fileInput = document.getElementById('file-input');
 const fileList = document.getElementById('file-list');
@@ -65,11 +68,43 @@ function buildCombinedText(results) {
     .join('\n\n');
 }
 
-fileInput.addEventListener('change', () => {
+fileInput.addEventListener('change', async () => {
   clearPreviewUrls();
-  selectedFiles = Array.from(fileInput.files ?? []);
+  const rawFiles = Array.from(fileInput.files ?? []);
   resultSection.hidden = true;
-  statusEl.textContent = '';
+  runButton.disabled = true;
+
+  // PDFs are expanded into one page-image per page *here*, at selection
+  // time, not at Run time — so the file list the user sees before clicking
+  // Run is exactly what will actually be processed, and Run itself never
+  // needs to know a PDF was ever involved: it's the same File[] pipeline
+  // multi-image batches already use.
+  const hasPdf = rawFiles.some(isPdfFile);
+  if (hasPdf) statusEl.textContent = 'Rendering PDF page(s)…';
+
+  const expanded = [];
+  const renderErrors = [];
+  for (const file of rawFiles) {
+    if (!isPdfFile(file)) {
+      expanded.push(file);
+      continue;
+    }
+    try {
+      const pages = await pdfToImageFiles(file, {
+        onPageError: (pageNumber, error) => {
+          renderErrors.push(`${file.name} page ${pageNumber}: ${error?.message ?? error}`);
+        },
+      });
+      expanded.push(...pages);
+    } catch (error) {
+      renderErrors.push(`${file.name}: ${error?.message ?? error}`);
+    }
+  }
+
+  selectedFiles = expanded;
+  statusEl.textContent = renderErrors.length > 0
+    ? `Rendered with errors — ${renderErrors.join('; ')}`
+    : '';
   renderFileList();
 
   runButton.disabled = selectedFiles.length === 0;
