@@ -1,0 +1,47 @@
+name: Bug report
+description: Something doesn't work as expected — recognition, the UI, or the network guarantee
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. A couple of things that make it actionable:
+
+        - **Found a way this page transmits your file, or anything derived from it?** That's the
+          core guarantee this project makes — please use
+          [private reporting](https://github.com/sayjavajava/quiet-ocr/security/advisories/new)
+          instead of a public issue. See [`SECURITY.md`](https://github.com/sayjavajava/quiet-ocr/blob/main/SECURITY.md).
+        - **Don't attach an image with real personal or sensitive content.** Issues are public by
+          default; if an image is needed to reproduce a recognition problem, use or build one
+          that doesn't contain anything you wouldn't want public.
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What did you do, what did you expect, what actually happened instead?
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: What kind of image (size, language, font, scan quality), what you clicked.
+    validations:
+      required: true
+
+  - type: input
+    id: browser
+    attributes:
+      label: Browser and OS
+      placeholder: e.g. Firefox 130 on Windows 11
+    validations:
+      required: true
+
+  - type: textarea
+    id: console
+    attributes:
+      label: Console output, if any
+      description: Open DevTools (F12) before reproducing — an error there is often the whole diagnosis.
+      render: shell
