@@ -52,6 +52,35 @@ function readDocxPages(docxBytes) {
   return pages.map((lines) => lines.join("\n"));
 }
 
+/**
+ * Selects files by constructing real File objects inside the page, rather
+ * than page.setInputFiles() with an OS file path. Needed specifically for
+ * Unicode filenames: this environment has no UTF-8 locale configured
+ * (LC_CTYPE=POSIX), which breaks Playwright's OS-level file-path handling
+ * for any non-ASCII name — confirmed directly (every accented/emoji/CJK
+ * filename tried via setInputFiles left the input with 0 files selected,
+ * even though the same paths are readable from Node directly) — and is
+ * unrelated to whether the app itself handles a File with a Unicode .name
+ * correctly. A File built in the page is what a real browser hands JS
+ * regardless of the host OS's locale, which is the thing actually worth
+ * testing here.
+ */
+async function selectFilesInBrowser(page, entries) {
+  await page.evaluate((entries) => {
+    function b64ToBytes(b64) {
+      const bin = atob(b64);
+      const bytes = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+      return bytes;
+    }
+    const dt = new DataTransfer();
+    for (const { name, b64, type } of entries) dt.items.add(new File([b64ToBytes(b64)], name, { type }));
+    const input = document.getElementById("file-input");
+    input.files = dt.files;
+    input.dispatchEvent(new Event("change", { bubbles: true }));
+  }, entries);
+}
+
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const PUBLIC_DIR = `${ROOT}public`;
 const FIXTURE_DIR = `${ROOT}test/fixtures/`;
@@ -323,6 +352,93 @@ try {
       failed = true;
     } else {
       console.log("✓ All 26 recognized correctly; the zip has 26 distinct, correctly-numbered .docx entries, none lost to a name collision.");
+    }
+    await context.close();
+  }
+
+  // --- Unicode filenames: a real, common case for a client-side OCR tool
+  // (a user's own files are not guaranteed to be ASCII-named) that nothing
+  // else here exercises. Two checks: the single-file download's real
+  // <a download> value (not Playwright's own download.suggestedFilename(),
+  // confirmed unreliable for non-ASCII names in this sandbox — falls back
+  // to a generic "download" even though the DOM property itself is
+  // correct, the same locale issue selectFilesInBrowser above works
+  // around), and — the more portable, tool-independent check — the zip's
+  // actual internal entry name for the batch case. ---
+  {
+    console.log(`\n=== unicode filename: single file, real <a download> value ===`);
+    const invoiceFixture = manifest.find((f) => f.name === "sample-invoice");
+    const unicodeName = "café ☕ résumé.png";
+    const invoiceB64 = readFileSync(`${FIXTURE_DIR}${invoiceFixture.file}`).toString("base64");
+
+    const context = await browser.newContext();
+    const page = await context.newPage();
+    page.on("pageerror", (e) => console.error("[pageerror]", String(e)));
+    await page.goto(`${origin}/index.html`, { waitUntil: "load" });
+    await selectFilesInBrowser(page, [{ name: unicodeName, b64: invoiceB64, type: "image/png" }]);
+    await page.waitForFunction(() => !document.getElementById("run").disabled, { timeout: 10000 });
+    const listedName = await page.textContent("#file-list .file-name");
+    await page.click("#run");
+    await page.waitForFunction(() => document.getElementById("status").textContent === "Done.", { timeout: 30000 });
+
+    const realDownloadName = await page.evaluate(() => new Promise((resolve) => {
+      const originalCreateElement = document.createElement.bind(document);
+      document.createElement = (tag) => {
+        const el = originalCreateElement(tag);
+        if (tag === "a") {
+          const originalClick = el.click.bind(el);
+          el.click = () => { resolve(el.download); originalClick(); };
+        }
+        return el;
+      };
+      document.getElementById("download").click();
+    }));
+    await page.waitForEvent("download");
+
+    console.log(`File-list name: ${JSON.stringify(listedName)}, real <a download> value: ${JSON.stringify(realDownloadName)}`);
+    const ok = listedName === unicodeName && realDownloadName === "café ☕ résumé.docx";
+    if (!ok) {
+      console.error("✗ FAILED: a Unicode filename wasn't preserved through selection and the real download name.");
+      failed = true;
+    } else {
+      console.log("✓ Unicode filename preserved through the file list and the real (DOM-level) download name.");
+    }
+    await context.close();
+  }
+
+  {
+    console.log(`\n=== unicode filename: batch, real zip entry name ===`);
+    const invoiceFixture = manifest.find((f) => f.name === "sample-invoice");
+    const tableFixture = manifest.find((f) => f.name === "table");
+    const unicodeName = "café ☕ résumé.png";
+    const invoiceB64 = readFileSync(`${FIXTURE_DIR}${invoiceFixture.file}`).toString("base64");
+    const tableB64 = readFileSync(`${FIXTURE_DIR}${tableFixture.file}`).toString("base64");
+
+    const context = await browser.newContext();
+    const page = await context.newPage();
+    page.on("pageerror", (e) => console.error("[pageerror]", String(e)));
+    await page.goto(`${origin}/index.html`, { waitUntil: "load" });
+    await selectFilesInBrowser(page, [
+      { name: unicodeName, b64: invoiceB64, type: "image/png" },
+      { name: tableFixture.file, b64: tableB64, type: "image/png" },
+    ]);
+    await page.waitForFunction(() => !document.getElementById("run").disabled, { timeout: 10000 });
+    await page.click("#run");
+    await page.waitForFunction(() => document.getElementById("status").textContent === "Done.", { timeout: 30000 });
+
+    const [download] = await Promise.all([page.waitForEvent("download"), page.click("#download")]);
+    const zipBytes = new Uint8Array(readFileSync(await download.path()));
+    const entries = unzipSync(zipBytes);
+    const names = Object.keys(entries).sort();
+    console.log(`Zip entry names: ${JSON.stringify(names)}`);
+
+    const ok = names.length === 2 && names.includes("café ☕ résumé.docx") && names.includes("table.docx")
+      && readDocxText(entries["café ☕ résumé.docx"]).includes(invoiceFixture.expectedText);
+    if (!ok) {
+      console.error("✗ FAILED: a Unicode filename wasn't preserved correctly as a real zip entry name.");
+      failed = true;
+    } else {
+      console.log("✓ Unicode filename preserved correctly as a real zip entry, with correct content.");
     }
     await context.close();
   }
