@@ -12,7 +12,10 @@
   "scripts": {
     "build": "node scripts/copy-vendor-assets.mjs",
     "serve": "npm run build && node scripts/serve.mjs",
-    "verify": "node scripts/verify.mjs"
+    "verify": "node scripts/verify.mjs",
+    "gen-fixtures": "node scripts/generate-test-fixture.mjs",
+    "measure-accuracy": "node scripts/measure-fixture-accuracy.mjs",
+    "bench": "node scripts/bench.mjs"
   },
   "devDependencies": {
     "@tesseract.js-data/eng": "1.0.0",
