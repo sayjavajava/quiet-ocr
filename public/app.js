@@ -235,7 +235,16 @@ runButton.addEventListener('click', async () => {
         // One bad image (corrupt file, unsupported content) shouldn't sink
         // the rest of the batch — record it and keep going, the same way
         // this fixed once for silent-partial-result bugs shouldn't repeat.
-        const message = error?.message ?? String(error);
+        //
+        // tesseract.js's own rejected Error objects sometimes already carry
+        // a leading "Error: " in .message (confirmed directly — a corrupt
+        // image throws with .message === "Error: Error attempting to read
+        // image."), which would otherwise double up under this file's own
+        // "Error: " prefix below. Stripped once here so every place that
+        // shows this message (status pill, preview text, the .docx
+        // placeholder) inherits the clean version instead of fixing each
+        // display site separately.
+        const message = (error?.message ?? String(error)).replace(/^error:\s*/i, '');
         results.push({ name: file.name, error: message });
         setFileStatus(i, `Error: ${message}`, 'error');
       }
@@ -268,7 +277,8 @@ runButton.addEventListener('click', async () => {
       ? `Error: all ${results.length} file(s) failed to recognize`
       : 'Done.';
   } catch (error) {
-    statusEl.textContent = `Error: ${error?.message ?? error}`;
+    const message = String(error?.message ?? error).replace(/^error:\s*/i, '');
+    statusEl.textContent = `Error: ${message}`;
     console.error(error);
   } finally {
     if (worker) {

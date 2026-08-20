@@ -46,7 +46,16 @@ await page.evaluate((text) => {
   ctx.font = '30px sans-serif';
   ctx.fillText(text, 20, 80);
 }, INVOICE_TEXT);
-writeFileSync(`${FIXTURE_DIR}sample-invoice.png`, await toPng());
+const invoicePng = await toPng();
+writeFileSync(`${FIXTURE_DIR}sample-invoice.png`, invoicePng);
+
+// --- corrupt-image: a genuinely truncated real PNG (the realistic "an
+// upload/download got cut off partway" case), not a synthetic 0-byte file
+// or random bytes — confirmed by hand against the real pipeline that this
+// makes Tesseract's recognize() genuinely throw ("Error attempting to read
+// image."), not just return empty/garbage text, which a truly empty file
+// also does but is a less realistic failure mode. ---
+writeFileSync(`${FIXTURE_DIR}corrupt-image.png`, invoicePng.subarray(0, 30));
 
 // --- paragraph: multi-line body text ---
 const PARAGRAPH_LINES = [

@@ -362,6 +362,59 @@ try {
     await context.close();
   }
 
+  // --- Per-file OCR failure: a real corrupt image (test/fixtures/corrupt-image.png
+  // — a genuinely truncated real PNG, not a synthetic empty file) mixed
+  // into a batch with two good ones. Confirms the whole error-handling
+  // chain with a real thrown error, not a simulated one: the batch doesn't
+  // abort, the bad file's status/preview both say so, the overall run
+  // still reports "Done." (not "all failed") since 2 of 3 succeeded, and
+  // the .docx export for the bad file contains the error placeholder text
+  // instead of silently omitting that file or crashing the export. ---
+  {
+    console.log(`\n=== per-file failure: one corrupt image in a 3-file batch ===`);
+    const invoiceFixture = manifest.find((f) => f.name === "sample-invoice");
+    const tableFixture = manifest.find((f) => f.name === "table");
+    const context = await browser.newContext();
+    const page = await context.newPage();
+    page.on("pageerror", (e) => console.error("[pageerror]", String(e)));
+
+    await page.goto(`${origin}/index.html`, { waitUntil: "load" });
+    await page.setInputFiles("#file-input", [
+      `${FIXTURE_DIR}${invoiceFixture.file}`,
+      `${FIXTURE_DIR}corrupt-image.png`,
+      `${FIXTURE_DIR}${tableFixture.file}`,
+    ]);
+    await page.click("#run");
+    await page.waitForFunction(() => document.getElementById("status").textContent === "Done.", { timeout: 30000 });
+
+    const fileStatuses = await page.$$eval("#file-list .file-status", (els) => els.map((e) => e.textContent));
+    const preview = await page.inputValue("#result");
+    const label = await page.textContent("#download");
+    const [download] = await Promise.all([page.waitForEvent("download"), page.click("#download")]);
+    const zipBytes = new Uint8Array(readFileSync(await download.path()));
+    const entries = unzipSync(zipBytes);
+    const corruptDocxText = readDocxText(entries["corrupt-image.docx"]);
+
+    console.log(`Per-file statuses: ${JSON.stringify(fileStatuses)}`);
+    console.log(`corrupt-image.docx text: ${JSON.stringify(corruptDocxText)}`);
+
+    const ok = fileStatuses.length === 3
+      && fileStatuses[0] === "Done" && fileStatuses[2] === "Done"
+      && fileStatuses[1].startsWith("Error:")
+      && preview.includes(invoiceFixture.expectedText) && preview.includes("Widget A")
+      && preview.includes("=== corrupt-image.png ===") && preview.includes("Error:")
+      && label === "Download .zip"
+      && Object.keys(entries).sort().join(",") === "corrupt-image.docx,sample-invoice.docx,table.docx"
+      && corruptDocxText.includes("Error recognizing this page:");
+    if (!ok) {
+      console.error("✗ FAILED: one corrupt file in a batch didn't degrade the way it should.");
+      failed = true;
+    } else {
+      console.log("✓ The bad file failed visibly (status, preview, and its own .docx) without sinking the other two.");
+    }
+    await context.close();
+  }
+
   // --- Race conditions: real UI state can be manipulated faster than a
   // single run's async flow, and the fixes for these were found by actually
   // reproducing the bugs first, not by inspection alone. ---
