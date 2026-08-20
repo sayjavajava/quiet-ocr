@@ -33,6 +33,54 @@ function readDocxText(docxBytes) {
   return xml.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
 }
 
+/**
+ * Splits a .docx's paragraphs back into per-Word-page text, using the same
+ * <w:pageBreakBefore/> marker docx-export.js writes (see its comment on
+ * why that's the real element, not w:type="page"). Needed to check
+ * page-by-page word accuracy on a .docx built from imperfect OCR text
+ * (readDocxText alone would only give one blob for the whole document).
+ */
+function readDocxPages(docxBytes) {
+  const xml = strFromU8(unzipSync(docxBytes)["word/document.xml"]);
+  const paragraphs = xml.match(/<w:p(?:\s[^>]*)?>[\s\S]*?<\/w:p>/g) ?? [];
+  const pages = [[]];
+  for (const p of paragraphs) {
+    if (p.includes("<w:pageBreakBefore/>") && pages[pages.length - 1].length > 0) pages.push([]);
+    const text = [...p.matchAll(/<w:t(?:\s[^>]*)?>([\s\S]*?)<\/w:t>/g)].map((m) => m[1]).join("");
+    pages[pages.length - 1].push(text);
+  }
+  return pages.map((lines) => lines.join("\n"));
+}
+
+/**
+ * Selects files by constructing real File objects inside the page, rather
+ * than page.setInputFiles() with an OS file path. Needed specifically for
+ * Unicode filenames: this environment has no UTF-8 locale configured
+ * (LC_CTYPE=POSIX), which breaks Playwright's OS-level file-path handling
+ * for any non-ASCII name — confirmed directly (every accented/emoji/CJK
+ * filename tried via setInputFiles left the input with 0 files selected,
+ * even though the same paths are readable from Node directly) — and is
+ * unrelated to whether the app itself handles a File with a Unicode .name
+ * correctly. A File built in the page is what a real browser hands JS
+ * regardless of the host OS's locale, which is the thing actually worth
+ * testing here.
+ */
+async function selectFilesInBrowser(page, entries) {
+  await page.evaluate((entries) => {
+    function b64ToBytes(b64) {
+      const bin = atob(b64);
+      const bytes = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+      return bytes;
+    }
+    const dt = new DataTransfer();
+    for (const { name, b64, type } of entries) dt.items.add(new File([b64ToBytes(b64)], name, { type }));
+    const input = document.getElementById("file-input");
+    input.files = dt.files;
+    input.dispatchEvent(new Event("change", { bubbles: true }));
+  }, entries);
+}
+
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const PUBLIC_DIR = `${ROOT}public`;
 const FIXTURE_DIR = `${ROOT}test/fixtures/`;
@@ -257,6 +305,144 @@ try {
     await context.close();
   }
 
+  // --- Large batch: accept path, not just dismiss. Only checking dismiss
+  // (above) would miss real bugs in the actual run — including a genuine
+  // one found by adding this: 26 copies of the same fixture all produced
+  // .docx files named "sample-invoice.docx", which zipSync silently
+  // collapsed to a single entry, losing 25 of the 26 recognized documents
+  // with no error. Fixed in app.js (uniqueDocxName) and verified here:
+  // 26 real, distinct, correctly-numbered .docx entries, not just that
+  // the run completes. Real measured time for this: ~8s, not the
+  // conservative ~45s the confirmation estimate itself uses — small and
+  // cheap enough for every CI run, not just a manual check. ---
+  {
+    console.log(`\n=== large batch (26x sample-invoice, accept path + duplicate-name dedup) ===`);
+    const invoiceFixture = manifest.find((f) => f.name === "sample-invoice");
+    const manyPaths = Array.from({ length: 26 }, () => `${FIXTURE_DIR}${invoiceFixture.file}`);
+
+    const context = await browser.newContext();
+    const page = await context.newPage();
+    page.on("pageerror", (e) => console.error("[pageerror]", String(e)));
+    page.on("dialog", (dialog) => dialog.accept());
+
+    await page.goto(`${origin}/index.html`, { waitUntil: "load" });
+    await page.setInputFiles("#file-input", manyPaths);
+    await page.waitForFunction(() => !document.getElementById("run").disabled);
+    await page.click("#run");
+    await page.waitForFunction(() => document.getElementById("status").textContent === "Done.", { timeout: 60000 });
+
+    const fileStatuses = await page.$$eval("#file-list .file-status", (els) => els.map((e) => e.textContent));
+    const [download] = await Promise.all([page.waitForEvent("download"), page.click("#download")]);
+    const zipBytes = new Uint8Array(readFileSync(await download.path()));
+    const entries = unzipSync(zipBytes);
+    const names = Object.keys(entries).sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+    const expectedNames = Array.from({ length: 26 }, (_, i) => (i === 0 ? "sample-invoice.docx" : `sample-invoice (${i + 1}).docx`)).sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+
+    console.log(`26/26 statuses "Done": ${fileStatuses.every((s) => s === "Done")}`);
+    console.log(`Zip entry count: ${names.length} (expected 26)`);
+
+    const ok = fileStatuses.length === 26 && fileStatuses.every((s) => s === "Done")
+      && names.length === 26
+      && JSON.stringify(names) === JSON.stringify(expectedNames)
+      && readDocxText(entries["sample-invoice.docx"]).includes(invoiceFixture.expectedText)
+      && readDocxText(entries["sample-invoice (13).docx"]).includes(invoiceFixture.expectedText)
+      && readDocxText(entries["sample-invoice (26).docx"]).includes(invoiceFixture.expectedText);
+    if (!ok) {
+      console.error("✗ FAILED: accepting a large batch of same-named files didn't complete correctly, or lost/misnamed entries in the zip.");
+      failed = true;
+    } else {
+      console.log("✓ All 26 recognized correctly; the zip has 26 distinct, correctly-numbered .docx entries, none lost to a name collision.");
+    }
+    await context.close();
+  }
+
+  // --- Unicode filenames: a real, common case for a client-side OCR tool
+  // (a user's own files are not guaranteed to be ASCII-named) that nothing
+  // else here exercises. Two checks: the single-file download's real
+  // <a download> value (not Playwright's own download.suggestedFilename(),
+  // confirmed unreliable for non-ASCII names in this sandbox — falls back
+  // to a generic "download" even though the DOM property itself is
+  // correct, the same locale issue selectFilesInBrowser above works
+  // around), and — the more portable, tool-independent check — the zip's
+  // actual internal entry name for the batch case. ---
+  {
+    console.log(`\n=== unicode filename: single file, real <a download> value ===`);
+    const invoiceFixture = manifest.find((f) => f.name === "sample-invoice");
+    const unicodeName = "café ☕ résumé.png";
+    const invoiceB64 = readFileSync(`${FIXTURE_DIR}${invoiceFixture.file}`).toString("base64");
+
+    const context = await browser.newContext();
+    const page = await context.newPage();
+    page.on("pageerror", (e) => console.error("[pageerror]", String(e)));
+    await page.goto(`${origin}/index.html`, { waitUntil: "load" });
+    await selectFilesInBrowser(page, [{ name: unicodeName, b64: invoiceB64, type: "image/png" }]);
+    await page.waitForFunction(() => !document.getElementById("run").disabled, { timeout: 10000 });
+    const listedName = await page.textContent("#file-list .file-name");
+    await page.click("#run");
+    await page.waitForFunction(() => document.getElementById("status").textContent === "Done.", { timeout: 30000 });
+
+    const realDownloadName = await page.evaluate(() => new Promise((resolve) => {
+      const originalCreateElement = document.createElement.bind(document);
+      document.createElement = (tag) => {
+        const el = originalCreateElement(tag);
+        if (tag === "a") {
+          const originalClick = el.click.bind(el);
+          el.click = () => { resolve(el.download); originalClick(); };
+        }
+        return el;
+      };
+      document.getElementById("download").click();
+    }));
+    await page.waitForEvent("download");
+
+    console.log(`File-list name: ${JSON.stringify(listedName)}, real <a download> value: ${JSON.stringify(realDownloadName)}`);
+    const ok = listedName === unicodeName && realDownloadName === "café ☕ résumé.docx";
+    if (!ok) {
+      console.error("✗ FAILED: a Unicode filename wasn't preserved through selection and the real download name.");
+      failed = true;
+    } else {
+      console.log("✓ Unicode filename preserved through the file list and the real (DOM-level) download name.");
+    }
+    await context.close();
+  }
+
+  {
+    console.log(`\n=== unicode filename: batch, real zip entry name ===`);
+    const invoiceFixture = manifest.find((f) => f.name === "sample-invoice");
+    const tableFixture = manifest.find((f) => f.name === "table");
+    const unicodeName = "café ☕ résumé.png";
+    const invoiceB64 = readFileSync(`${FIXTURE_DIR}${invoiceFixture.file}`).toString("base64");
+    const tableB64 = readFileSync(`${FIXTURE_DIR}${tableFixture.file}`).toString("base64");
+
+    const context = await browser.newContext();
+    const page = await context.newPage();
+    page.on("pageerror", (e) => console.error("[pageerror]", String(e)));
+    await page.goto(`${origin}/index.html`, { waitUntil: "load" });
+    await selectFilesInBrowser(page, [
+      { name: unicodeName, b64: invoiceB64, type: "image/png" },
+      { name: tableFixture.file, b64: tableB64, type: "image/png" },
+    ]);
+    await page.waitForFunction(() => !document.getElementById("run").disabled, { timeout: 10000 });
+    await page.click("#run");
+    await page.waitForFunction(() => document.getElementById("status").textContent === "Done.", { timeout: 30000 });
+
+    const [download] = await Promise.all([page.waitForEvent("download"), page.click("#download")]);
+    const zipBytes = new Uint8Array(readFileSync(await download.path()));
+    const entries = unzipSync(zipBytes);
+    const names = Object.keys(entries).sort();
+    console.log(`Zip entry names: ${JSON.stringify(names)}`);
+
+    const ok = names.length === 2 && names.includes("café ☕ résumé.docx") && names.includes("table.docx")
+      && readDocxText(entries["café ☕ résumé.docx"]).includes(invoiceFixture.expectedText);
+    if (!ok) {
+      console.error("✗ FAILED: a Unicode filename wasn't preserved correctly as a real zip entry name.");
+      failed = true;
+    } else {
+      console.log("✓ Unicode filename preserved correctly as a real zip entry, with correct content.");
+    }
+    await context.close();
+  }
+
   // --- Word-document export: the actual downloaded file, not just the
   // on-screen preview text, is what users take away — verify the real
   // bytes Playwright captures from a real download event, not just that
@@ -358,6 +544,321 @@ try {
       failed = true;
     } else {
       console.log("✓ A multi-page PDF downloads as one .docx with a real page break between each page.");
+    }
+    await context.close();
+  }
+
+  // --- docx export from a *degraded* PDF, not just clean vector text.
+  // sample-multipage.pdf above is clean vector text, which the .docx step
+  // just has to carry through faithfully; scanned-multipage.pdf's pages
+  // are raster images with real, imperfect OCR output — this checks the
+  // .docx export step doesn't lose or mangle that on the way out, using
+  // the same word-accuracy bar (scripts/text-accuracy.mjs) the fixture
+  // loop above already established for this fixture, not exact match. ---
+  {
+    console.log(`\n=== docx export: degraded/scanned PDF -> .docx with real OCR imperfections intact ===`);
+    const pdfFixture = manifest.find((f) => f.name === "scanned-multipage");
+    const context = await browser.newContext();
+    const page = await context.newPage();
+    page.on("pageerror", (e) => console.error("[pageerror]", String(e)));
+
+    await page.goto(`${origin}/index.html`, { waitUntil: "load" });
+    await page.setInputFiles("#file-input", `${FIXTURE_DIR}${pdfFixture.file}`);
+    await page.waitForFunction(() => !document.getElementById("run").disabled, { timeout: 20000 });
+    await page.click("#run");
+    await page.waitForFunction(() => document.getElementById("status").textContent === "Done.", { timeout: 60000 });
+
+    const [download] = await Promise.all([page.waitForEvent("download"), page.click("#download")]);
+    const bytes = new Uint8Array(readFileSync(await download.path()));
+    const pages = readDocxPages(bytes);
+    const threshold = THRESHOLDS[pdfFixture.name];
+
+    let allOk = pages.length === pdfFixture.expectedPages.length;
+    pdfFixture.expectedPages.forEach((expected, i) => {
+      const accuracy = pages[i] ? wordAccuracy(expected, pages[i]) : 0;
+      const ok = accuracy >= threshold;
+      allOk &&= ok;
+      console.log(`  page ${i + 1}: ${(accuracy * 100).toFixed(1)}% ${ok ? "✓" : "✗"} — ${JSON.stringify(pages[i])}`);
+    });
+    if (!allOk) {
+      console.error("✗ FAILED: the degraded PDF's .docx export lost accuracy or page structure vs. the on-screen preview.");
+      failed = true;
+    } else {
+      console.log("✓ Degraded-PDF .docx export preserves per-page structure and real OCR accuracy.");
+    }
+    await context.close();
+  }
+
+  // --- Per-file OCR failure: a real corrupt image (test/fixtures/corrupt-image.png
+  // — a genuinely truncated real PNG, not a synthetic empty file) mixed
+  // into a batch with two good ones. Confirms the whole error-handling
+  // chain with a real thrown error, not a simulated one: the batch doesn't
+  // abort, the bad file's status/preview both say so, the overall run
+  // still reports "Done." (not "all failed") since 2 of 3 succeeded, and
+  // the .docx export for the bad file contains the error placeholder text
+  // instead of silently omitting that file or crashing the export. ---
+  {
+    console.log(`\n=== per-file failure: one corrupt image in a 3-file batch ===`);
+    const invoiceFixture = manifest.find((f) => f.name === "sample-invoice");
+    const tableFixture = manifest.find((f) => f.name === "table");
+    const context = await browser.newContext();
+    const page = await context.newPage();
+    page.on("pageerror", (e) => console.error("[pageerror]", String(e)));
+
+    await page.goto(`${origin}/index.html`, { waitUntil: "load" });
+    await page.setInputFiles("#file-input", [
+      `${FIXTURE_DIR}${invoiceFixture.file}`,
+      `${FIXTURE_DIR}corrupt-image.png`,
+      `${FIXTURE_DIR}${tableFixture.file}`,
+    ]);
+    await page.click("#run");
+    await page.waitForFunction(() => document.getElementById("status").textContent === "Done.", { timeout: 30000 });
+
+    const fileStatuses = await page.$$eval("#file-list .file-status", (els) => els.map((e) => e.textContent));
+    const preview = await page.inputValue("#result");
+    const label = await page.textContent("#download");
+    const [download] = await Promise.all([page.waitForEvent("download"), page.click("#download")]);
+    const zipBytes = new Uint8Array(readFileSync(await download.path()));
+    const entries = unzipSync(zipBytes);
+    const corruptDocxText = readDocxText(entries["corrupt-image.docx"]);
+
+    console.log(`Per-file statuses: ${JSON.stringify(fileStatuses)}`);
+    console.log(`corrupt-image.docx text: ${JSON.stringify(corruptDocxText)}`);
+
+    const ok = fileStatuses.length === 3
+      && fileStatuses[0] === "Done" && fileStatuses[2] === "Done"
+      && fileStatuses[1].startsWith("Error:")
+      && preview.includes(invoiceFixture.expectedText) && preview.includes("Widget A")
+      && preview.includes("=== corrupt-image.png ===") && preview.includes("Error:")
+      && label === "Download .zip"
+      && Object.keys(entries).sort().join(",") === "corrupt-image.docx,sample-invoice.docx,table.docx"
+      && corruptDocxText.includes("Error recognizing this page:");
+    if (!ok) {
+      console.error("✗ FAILED: one corrupt file in a batch didn't degrade the way it should.");
+      failed = true;
+    } else {
+      console.log("✓ The bad file failed visibly (status, preview, and its own .docx) without sinking the other two.");
+    }
+    await context.close();
+  }
+
+  // --- PDF page-render failure: one page of a real PDF fails to rasterize
+  // while the pages around it render fine. Real byte-level corruption was
+  // tried first (a garbled FlateDecode content stream, an absurd
+  // 200000x200000pt page) and pdf.js recovered from both without
+  // throwing — genuinely resilient by design, not a gap in these attempts.
+  // This uses targeted fault injection instead: pdf.js's page.render()
+  // calls canvas.getContext('2d') internally exactly once per page when
+  // given a raw canvas (see public/pdf-to-images.js), so failing that call
+  // on the 2nd invocation reliably exercises the real per-page try/catch
+  // without needing an artificially-corrupted fixture. ---
+  {
+    console.log(`\n=== PDF page-render failure: page 2 of 3 fails, 1 and 3 still render ===`);
+    const pdfFixture = manifest.find((f) => f.name === "sample-multipage");
+    const context = await browser.newContext();
+    const page = await context.newPage();
+    page.on("pageerror", (e) => console.error("[pageerror]", String(e)));
+
+    await page.goto(`${origin}/index.html`, { waitUntil: "load" });
+    await page.evaluate(() => {
+      let getContextCalls = 0;
+      const original = HTMLCanvasElement.prototype.getContext;
+      HTMLCanvasElement.prototype.getContext = function (...args) {
+        getContextCalls += 1;
+        if (getContextCalls === 2) throw new Error("Injected failure for page 2");
+        return original.apply(this, args);
+      };
+    });
+    await page.setInputFiles("#file-input", `${FIXTURE_DIR}${pdfFixture.file}`);
+    await page.waitForFunction(() => !document.getElementById("run").disabled, { timeout: 20000 });
+
+    const statusAfterRender = await page.textContent("#status");
+    const namesAfterRender = await page.$$eval("#file-list .file-name", (els) => els.map((e) => e.textContent));
+    const runLabel = await page.textContent("#run");
+
+    await page.click("#run");
+    await page.waitForFunction(() => document.getElementById("status").textContent === "Done.", { timeout: 30000 });
+    const preview = await page.inputValue("#result");
+
+    console.log(`Status after render: ${JSON.stringify(statusAfterRender)}`);
+    console.log(`File list after render: ${JSON.stringify(namesAfterRender)}`);
+
+    const ok = statusAfterRender.includes("Rendered with errors") && statusAfterRender.includes("page 2")
+      && namesAfterRender.length === 2
+      && namesAfterRender[0] === `${pdfFixture.name}-page-1.png` && namesAfterRender[1] === `${pdfFixture.name}-page-3.png`
+      && runLabel === "Run OCR on 2 images"
+      && preview.includes(pdfFixture.expectedPages[0]) && preview.includes(pdfFixture.expectedPages[2])
+      && !preview.includes(pdfFixture.expectedPages[1]);
+    if (!ok) {
+      console.error("✗ FAILED: a page-render failure didn't degrade the way it should.");
+      failed = true;
+    } else {
+      console.log("✓ Page 2 failed visibly; pages 1 and 3 still rendered, ran, and recognized correctly.");
+    }
+    await context.close();
+  }
+
+  // --- Mixed batch: an image and a PDF selected together in one run, not
+  // tested anywhere else — every other batch test uses all-images or a
+  // single PDF. Confirms the image and the PDF's rendered pages coexist
+  // correctly in the same selectedFiles/fileGroups pipeline, and that the
+  // image gets its own single-page .docx alongside the PDF's own
+  // multi-page .docx in the resulting .zip. ---
+  {
+    console.log(`\n=== mixed batch: one image + one PDF together ===`);
+    const invoiceFixture = manifest.find((f) => f.name === "sample-invoice");
+    const pdfFixture = manifest.find((f) => f.name === "sample-multipage");
+    const context = await browser.newContext();
+    const page = await context.newPage();
+    page.on("pageerror", (e) => console.error("[pageerror]", String(e)));
+
+    await page.goto(`${origin}/index.html`, { waitUntil: "load" });
+    await page.setInputFiles("#file-input", [`${FIXTURE_DIR}${invoiceFixture.file}`, `${FIXTURE_DIR}${pdfFixture.file}`]);
+    await page.waitForFunction(() => !document.getElementById("run").disabled, { timeout: 20000 });
+
+    const namesAfterRender = await page.$$eval("#file-list .file-name", (els) => els.map((e) => e.textContent));
+    const runLabel = await page.textContent("#run");
+
+    await page.click("#run");
+    await page.waitForFunction(() => document.getElementById("status").textContent === "Done.", { timeout: 30000 });
+    const preview = await page.inputValue("#result");
+
+    const label = await page.textContent("#download");
+    const [download] = await Promise.all([page.waitForEvent("download"), page.click("#download")]);
+    const zipBytes = new Uint8Array(readFileSync(await download.path()));
+    const entries = unzipSync(zipBytes);
+    const names = Object.keys(entries).sort();
+    const pdfDocxBreaks = entries["sample-multipage.docx"]
+      ? (strFromU8(unzipSync(entries["sample-multipage.docx"])["word/document.xml"]).match(/<w:pageBreakBefore\/>/g) || []).length
+      : -1;
+
+    console.log(`File list: ${JSON.stringify(namesAfterRender)}`);
+    console.log(`Zip entries: ${JSON.stringify(names)}`);
+
+    const ok = namesAfterRender.length === 4 // 1 image + 3 PDF pages
+      && namesAfterRender[0] === invoiceFixture.file
+      && runLabel === "Run OCR on 4 images"
+      && preview.includes(invoiceFixture.expectedText)
+      && pdfFixture.expectedPages.every((p) => preview.includes(p))
+      && label === "Download .zip"
+      && names.length === 2 && names.includes("sample-invoice.docx") && names.includes("sample-multipage.docx")
+      && readDocxText(entries["sample-invoice.docx"]).includes(invoiceFixture.expectedText)
+      && pdfDocxBreaks === pdfFixture.expectedPages.length - 1;
+    if (!ok) {
+      console.error("✗ FAILED: a mixed image+PDF batch didn't behave as expected.");
+      failed = true;
+    } else {
+      console.log("✓ Image and PDF coexisted correctly through recognition and export: 2 .docx files, one per original file.");
+    }
+    await context.close();
+  }
+
+  // --- Race conditions: real UI state can be manipulated faster than a
+  // single run's async flow, and the fixes for these were found by actually
+  // reproducing the bugs first, not by inspection alone. ---
+  {
+    console.log(`\n=== race: mid-run reselection doesn't corrupt the running batch ===`);
+    const invoiceFixture = manifest.find((f) => f.name === "sample-invoice");
+    const tableFixture = manifest.find((f) => f.name === "table");
+    const paragraphFixture = manifest.find((f) => f.name === "paragraph");
+    const context = await browser.newContext();
+    const page = await context.newPage();
+    page.on("pageerror", (e) => console.error("[pageerror]", String(e)));
+
+    await page.goto(`${origin}/index.html`, { waitUntil: "load" });
+    await page.setInputFiles("#file-input", [
+      `${FIXTURE_DIR}${invoiceFixture.file}`,
+      `${FIXTURE_DIR}${tableFixture.file}`,
+      `${FIXTURE_DIR}${paragraphFixture.file}`,
+    ]);
+    await page.click("#run");
+    await page.waitForFunction(() => document.getElementById("status").textContent.startsWith("Recognizing"), { timeout: 20000 });
+    const disabledMidRun = await page.$eval("#file-input", (el) => el.disabled);
+
+    // setInputFiles bypasses the native disabled-input block entirely (it
+    // sets .files and dispatches change() directly, not via a simulated
+    // click on the picker) — this is deliberately the harder case, testing
+    // the isRunning guard specifically, not just the disabled attribute.
+    await page.setInputFiles("#file-input", `${FIXTURE_DIR}${invoiceFixture.file}`);
+    await page.waitForTimeout(200);
+    const runStillDisabled = await page.$eval("#run", (el) => el.disabled);
+
+    await page.waitForFunction(() => document.getElementById("status").textContent === "Done.", { timeout: 30000 });
+    const names = await page.$$eval("#file-list .file-name", (els) => els.map((e) => e.textContent));
+    const result = await page.inputValue("#result");
+
+    const ok = disabledMidRun && runStillDisabled && names.length === 3
+      && result.includes(invoiceFixture.file) && result.includes(tableFixture.file) && result.includes(paragraphFixture.file);
+    console.log(`fileInput.disabled mid-run: ${disabledMidRun}, run.disabled after forced reselect: ${runStillDisabled}, file-list after: ${JSON.stringify(names)}`);
+    if (!ok) {
+      console.error("✗ FAILED: a mid-run reselection attempt corrupted or truncated the in-flight run.");
+      failed = true;
+    } else {
+      console.log("✓ Original 3-file run completed uncorrupted; the mid-run reselection attempt was ignored.");
+    }
+    await context.close();
+  }
+
+  {
+    console.log(`\n=== race: synchronous double-click on Run starts only one recognition ===`);
+    const invoiceFixture = manifest.find((f) => f.name === "sample-invoice");
+    const context = await browser.newContext();
+    const page = await context.newPage();
+    page.on("pageerror", (e) => console.error("[pageerror]", String(e)));
+
+    await page.goto(`${origin}/index.html`, { waitUntil: "load" });
+    let createWorkerCalls = 0;
+    await page.exposeFunction("__countCreateWorker", () => { createWorkerCalls += 1; });
+    await page.evaluate(() => {
+      const original = Tesseract.createWorker;
+      Tesseract.createWorker = (...args) => { window.__countCreateWorker(); return original(...args); };
+    });
+    await page.setInputFiles("#file-input", `${FIXTURE_DIR}${invoiceFixture.file}`);
+    // Two .click() calls in one synchronous script — the real test of
+    // whether the handler's lock (isRunning set before anything else,
+    // including before the large-batch confirm() dialog) actually holds.
+    // A Promise.all() of two separate page.click() calls is NOT an
+    // equivalent test: Playwright's own click machinery has enough
+    // latency that the two land seconds apart, well after the first run
+    // already finished — that looked like a failure on first attempt and
+    // was actually a test-methodology bug, not an app bug; caught by
+    // logging real event timestamps before trusting the result.
+    await page.evaluate(() => {
+      const btn = document.getElementById('run');
+      btn.click();
+      btn.click();
+    });
+    await page.waitForFunction(() => document.getElementById("status").textContent === "Done.", { timeout: 30000 });
+
+    console.log(`Tesseract.createWorker call count: ${createWorkerCalls}`);
+    if (createWorkerCalls !== 1) {
+      console.error("✗ FAILED: a synchronous double-click started more than one recognition run.");
+      failed = true;
+    } else {
+      console.log("✓ Only one recognition run started.");
+    }
+    await context.close();
+  }
+
+  {
+    console.log(`\n=== race: Download is structurally inaccessible during an active run ===`);
+    const invoiceFixture = manifest.find((f) => f.name === "sample-invoice");
+    const context = await browser.newContext();
+    const page = await context.newPage();
+    page.on("pageerror", (e) => console.error("[pageerror]", String(e)));
+
+    await page.goto(`${origin}/index.html`, { waitUntil: "load" });
+    await page.setInputFiles("#file-input", `${FIXTURE_DIR}${invoiceFixture.file}`);
+    await page.click("#run");
+    await page.waitForFunction(() => document.getElementById("status").textContent.startsWith("Recognizing"), { timeout: 20000 });
+    const resultSectionHiddenMidRun = await page.$eval("#result-section", (el) => el.hidden);
+    await page.waitForFunction(() => document.getElementById("status").textContent === "Done.", { timeout: 30000 });
+
+    if (!resultSectionHiddenMidRun) {
+      console.error("✗ FAILED: the result/download section was visible during an active run.");
+      failed = true;
+    } else {
+      console.log("✓ Download button is inaccessible (parent section hidden) for the duration of a run.");
     }
     await context.close();
   }

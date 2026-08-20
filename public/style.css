@@ -213,6 +213,17 @@ h1 .grad {
 
 .picker-btn { margin: 0; }
 
+/* The "Choose Files" trigger is a <label>, which can't itself be :disabled —
+   reflect the real, functional #file-input[disabled] (set while a run is in
+   progress, so a mid-run reselection can't corrupt the running batch) onto
+   its visual stand-in. */
+.picker:has(#file-input:disabled) .picker-btn,
+.picker:has(#file-input:disabled) .picker-title {
+  opacity: 0.5;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
 .btn-block {
   display: block;
   width: 100%;
