@@ -65,7 +65,15 @@ the trust chain and a pinned, known version instead of "whatever the CDN current
 
 English only, image input only (PNG/JPEG/WebP/BMP) — no PDF support yet. Rasterizing a PDF page
 and feeding it through the same pipeline is a natural follow-up, not a redesign, if there's
-demand for it.
+demand for it. Also single-image only for now: the file input takes one image per run, not a
+batch of pages — see [`docs/PERFORMANCE.md`](docs/PERFORMANCE.md) for why that's a reasonable
+limit at the moment (a full page at scanning resolution already takes ~17 seconds on its own).
+
+## Performance
+
+See [`docs/PERFORMANCE.md`](docs/PERFORMANCE.md) for real, measured engine-load and
+recognition-time numbers (`npm run bench`) across fixtures from a short single line to a
+full scanned page.
 
 ## License
 

@@ -1,12 +1,17 @@
 #!/usr/bin/env node
 /**
  * Real end-to-end verification, not a smoke test: loads the actual built
- * page in a real browser, uploads a fixture image with known text through
- * the real file-input UI, clicks the real button, and checks two things
- * that actually matter for this project — not just "did it build":
+ * page in a real browser, uploads each fixture in test/fixtures/manifest.json
+ * through the real file-input UI, clicks the real button, and checks two
+ * things that actually matter for this project — not just "did it build":
  *
- *   1. OCR genuinely works: the recognized text exactly matches the known
- *      fixture text.
+ *   1. OCR genuinely works on real-world-shaped input: an exact match for
+ *      the one clean, single-line fixture, and a word-accuracy threshold
+ *      (see scripts/text-accuracy.mjs) for the others, since real OCR
+ *      output on a paragraph, a table, or a degraded scan legitimately
+ *      varies without being broken. Thresholds are set from real measured
+ *      numbers (scripts/measure-fixture-accuracy.mjs), not guesses — see
+ *      each fixture's threshold below for the measurement it's pinned to.
  *   2. The core promise holds: no network request during the run carries
  *      anything derived from the image, and nothing beyond the expected
  *      same-origin /vendor/ assets is ever requested.
@@ -19,76 +24,114 @@ import { chromium } from "playwright";
 import { readFileSync, existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { startServer } from "./serve.mjs";
+import { wordAccuracy } from "./text-accuracy.mjs";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const PUBLIC_DIR = `${ROOT}public`;
-const FIXTURE_PATH = `${ROOT}test/fixtures/sample-invoice.png`;
-const EXPECTED_TEXT = "Invoice number 88214, total due $942.50";
+const FIXTURE_DIR = `${ROOT}test/fixtures/`;
 const PORT = 8931;
+
+// Minimum word accuracy per fixture. Set from real runs of
+// scripts/measure-fixture-accuracy.mjs against the committed fixtures, with
+// a small margin below the measured value — not a guess, and not 100%,
+// because holding real OCR output to a perfect bar would make this test
+// flake on the model's own legitimate, harmless variance.
+const THRESHOLDS = {
+  // measured 100% (see scripts/generate-test-fixture.mjs's fixture comment)
+  paragraph: 0.9,
+  table: 0.85,
+  // measured 92.5% at 6° rotation / seed 20260820 / +/-85 noise / 1.1px blur
+  "noisy-scan": 0.8,
+};
 
 if (!existsSync(`${PUBLIC_DIR}/vendor/tesseract.min.js`)) {
   console.error("✗ public/vendor/ not found — run `npm run build` first.");
   process.exit(1);
 }
-if (!existsSync(FIXTURE_PATH)) {
-  console.error(`✗ Fixture not found at ${FIXTURE_PATH}.`);
+if (!existsSync(`${FIXTURE_DIR}manifest.json`)) {
+  console.error(`✗ Manifest not found at ${FIXTURE_DIR}manifest.json.`);
   process.exit(1);
 }
 
+const manifest = JSON.parse(readFileSync(`${FIXTURE_DIR}manifest.json`, "utf8"));
 const server = await startServer(PUBLIC_DIR, PORT);
 const origin = `http://127.0.0.1:${PORT}`;
 
 const launchOptions = {};
 if (process.env.PLAYWRIGHT_CHROMIUM_PATH) launchOptions.executablePath = process.env.PLAYWRIGHT_CHROMIUM_PATH;
 const browser = await chromium.launch(launchOptions);
-const context = await browser.newContext();
-const page = await context.newPage();
-
-const requests = [];
-page.on("request", (r) => requests.push({ url: r.url(), postDataLength: (r.postData() || "").length }));
-page.on("pageerror", (e) => console.error("[pageerror]", String(e)));
 
 let failed = false;
+const allRequests = [];
 
 try {
-  console.log("Loading QuietOCR...");
-  await page.goto(`${origin}/index.html`, { waitUntil: "load" });
+  for (const fixture of manifest) {
+    const fixturePath = `${FIXTURE_DIR}${fixture.file}`;
+    if (!existsSync(fixturePath)) {
+      console.error(`✗ Fixture not found at ${fixturePath}.`);
+      failed = true;
+      continue;
+    }
 
-  console.log("Uploading fixture image via the real file input...");
-  await page.setInputFiles("#file-input", FIXTURE_PATH);
+    console.log(`\n=== ${fixture.name} (${fixture.mode}) ===`);
 
-  console.log("Clicking Run OCR...");
-  await page.click("#run");
+    const context = await browser.newContext();
+    const page = await context.newPage();
+    const requests = [];
+    page.on("request", (r) => requests.push({ url: r.url(), postDataLength: (r.postData() || "").length }));
+    page.on("pageerror", (e) => console.error("[pageerror]", String(e)));
 
-  console.log("Waiting for recognition to finish (up to 60s)...");
-  await page.waitForFunction(
-    () => document.getElementById("status").textContent === "Done." ||
-      /^Error:/.test(document.getElementById("status").textContent),
-    { timeout: 60000 },
-  );
+    await page.goto(`${origin}/index.html`, { waitUntil: "load" });
+    await page.setInputFiles("#file-input", fixturePath);
+    await page.click("#run");
+    await page.waitForFunction(
+      () => document.getElementById("status").textContent === "Done." ||
+        /^Error:/.test(document.getElementById("status").textContent),
+      { timeout: 60000 },
+    );
 
-  const status = await page.textContent("#status");
-  if (status.startsWith("Error:")) throw new Error(`Page reported: ${status}`);
+    const status = await page.textContent("#status");
+    if (status.startsWith("Error:")) {
+      console.error(`✗ FAILED: page reported ${status}`);
+      failed = true;
+    } else {
+      const recognized = (await page.inputValue("#result")).trim();
+      console.log(`Expected:   ${JSON.stringify(fixture.expectedText)}`);
+      console.log(`Recognized: ${JSON.stringify(recognized)}`);
 
-  const recognized = (await page.inputValue("#result")).trim();
-  console.log(`\nExpected:   ${JSON.stringify(EXPECTED_TEXT)}`);
-  console.log(`Recognized: ${JSON.stringify(recognized)}`);
+      if (fixture.mode === "exact") {
+        if (recognized !== fixture.expectedText) {
+          console.error("✗ FAILED: recognized text does not exactly match the fixture's known text.");
+          failed = true;
+        } else {
+          console.log("✓ OCR recognized the fixture text exactly.");
+        }
+      } else {
+        const accuracy = wordAccuracy(fixture.expectedText, recognized);
+        const threshold = THRESHOLDS[fixture.name];
+        console.log(`Word accuracy: ${(accuracy * 100).toFixed(1)}% (threshold: ${(threshold * 100).toFixed(0)}%)`);
+        if (accuracy < threshold) {
+          console.error("✗ FAILED: word accuracy below threshold.");
+          failed = true;
+        } else {
+          console.log("✓ Word accuracy meets threshold.");
+        }
+      }
+    }
 
-  if (recognized !== EXPECTED_TEXT) {
-    console.error("\n✗ FAILED: recognized text does not exactly match the fixture's known text.");
-    failed = true;
-  } else {
-    console.log("✓ OCR recognized the fixture text exactly.");
+    allRequests.push(...requests);
+    await context.close();
   }
 
-  // Every request must be same-origin (this server) or a blob: URL (an
-  // in-memory object reference that never leaves the browser process —
-  // not a network request to anywhere). Anything else, or any request
-  // carrying a body, would mean something is being sent off-machine.
-  const suspicious = requests.filter(
+  // Every request across every fixture run must be same-origin (this
+  // server) or a blob: URL (an in-memory object reference that never
+  // leaves the browser process — not a network request to anywhere).
+  // Anything else, or any request carrying a body, would mean something is
+  // being sent off-machine.
+  const suspicious = allRequests.filter(
     (r) => r.postDataLength > 0 || (!r.url.startsWith(origin) && !r.url.startsWith("blob:")),
   );
-  console.log(`\n${requests.length} total requests, ${suspicious.length} suspicious.`);
+  console.log(`\n${allRequests.length} total requests across all fixtures, ${suspicious.length} suspicious.`);
   if (suspicious.length > 0) {
     console.error("✗ FAILED: found a request that looks like it could carry data off-machine:");
     for (const r of suspicious) console.error("  ", r);

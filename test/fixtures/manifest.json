@@ -1,0 +1,26 @@
+[
+  {
+    "name": "sample-invoice",
+    "file": "sample-invoice.png",
+    "expectedText": "Invoice number 88214, total due $942.50",
+    "mode": "exact"
+  },
+  {
+    "name": "paragraph",
+    "file": "paragraph.png",
+    "expectedText": "The quarterly report shows a steady increase in revenue across all regions. Customer satisfaction scores improved by 12% compared to the previous period, while operational costs remained flat. The board recommends continuing the current strategy through the next fiscal year.",
+    "mode": "word-accuracy"
+  },
+  {
+    "name": "table",
+    "file": "table.png",
+    "expectedText": "Item        Qty   Price    Total Widget A     3   $12.50   $37.50 Widget B     1   $89.99   $89.99 Widget C     5    $4.25   $21.25",
+    "mode": "word-accuracy"
+  },
+  {
+    "name": "noisy-scan",
+    "file": "noisy-scan.png",
+    "expectedText": "The quarterly report shows a steady increase in revenue across all regions. Customer satisfaction scores improved by 12% compared to the previous period, while operational costs remained flat. The board recommends continuing the current strategy through the next fiscal year.",
+    "mode": "word-accuracy"
+  }
+]
