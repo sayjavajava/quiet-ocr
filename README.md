@@ -1,5 +1,7 @@
 # QuietOCR
 
+[![License: GPL-3.0-or-later](https://img.shields.io/github/license/sayjavajava/quiet-ocr)](LICENSE)
+
 Pull text out of an image, entirely in your browser.
 
 ## What it actually promises — read this before trusting it
@@ -68,3 +70,18 @@ demand for it.
 ## License
 
 GPL-3.0-or-later. See [`LICENSE`](LICENSE).
+
+## Security
+
+Found a way this page transmits your file, or any other vulnerability? Please don't open a
+public issue — see [`SECURITY.md`](SECURITY.md) for how to report it privately.
+
+## Contribution Guidelines
+
+We welcome contributions! See [`CONTRIBUTING.md`](CONTRIBUTING.md) for setup, what a PR should
+include, and what's in/out of scope. Participation is governed by the
+[Code of Conduct](CODE_OF_CONDUCT.md).
+
+## Contact
+
+Questions or feedback — [GitHub Issues](https://github.com/sayjavajava/quiet-ocr/issues).

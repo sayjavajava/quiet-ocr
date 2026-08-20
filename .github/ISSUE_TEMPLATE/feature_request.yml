@@ -1,0 +1,31 @@
+name: Feature request
+description: Suggest an improvement — accuracy, a new language, the UI, anything
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Before requesting something that would require uploading the user's file anywhere, or
+        that would make this claim to be fully offline the way its sibling
+        [OffGridPDF](https://github.com/sayjavajava/offline-pdf-utility) actually is — this
+        project's two real constraints (see [`CONTRIBUTING.md`](https://github.com/sayjavajava/quiet-ocr/blob/main/CONTRIBUTING.md#what-s-in-scope))
+        aren't going to change. Everything else is fair game.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem does this solve
+    validations:
+      required: true
+
+  - type: textarea
+    id: solution
+    attributes:
+      label: Proposed solution
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
