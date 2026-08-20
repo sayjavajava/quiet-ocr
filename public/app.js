@@ -48,9 +48,14 @@ function renderFileList() {
   fileList.hidden = selectedFiles.length === 0;
 }
 
-function setFileStatus(index, text) {
+// `state` drives the status pill's color (see style.css) — purely visual,
+// derived from the same three states the text already distinguishes.
+function setFileStatus(index, text, state = 'working') {
   const li = fileList.children[index];
-  if (li) li.querySelector('.file-status').textContent = text;
+  if (!li) return;
+  const statusEl = li.querySelector('.file-status');
+  statusEl.textContent = text;
+  statusEl.dataset.state = state;
 }
 
 // Single file: plain recognized text, unchanged from before batching existed
@@ -145,19 +150,19 @@ runButton.addEventListener('click', async () => {
         : 'Recognizing: ';
       statusEl.dataset.prefix = prefix;
       statusEl.textContent = `${prefix}…`;
-      setFileStatus(i, 'Recognizing…');
+      setFileStatus(i, 'Recognizing…', 'working');
 
       try {
         const { data } = await worker.recognize(file);
         results.push({ name: file.name, text: data.text });
-        setFileStatus(i, 'Done');
+        setFileStatus(i, 'Done', 'done');
       } catch (error) {
         // One bad image (corrupt file, unsupported content) shouldn't sink
         // the rest of the batch — record it and keep going, the same way
         // this fixed once for silent-partial-result bugs shouldn't repeat.
         const message = error?.message ?? String(error);
         results.push({ name: file.name, error: message });
-        setFileStatus(i, `Error: ${message}`);
+        setFileStatus(i, `Error: ${message}`, 'error');
       }
     }
 
