@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>QuietOCR</title>
+  <meta name="description" content="OCR that runs entirely in your browser. Nothing you scan is ever uploaded." />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <main>
+    <h1>QuietOCR</h1>
+    <p class="tagline">
+      Pull text out of an image, entirely in your browser. This page loads its own code from the
+      network — but once it has, your image is never uploaded anywhere. Recognition runs locally,
+      in WebAssembly, on your machine.
+    </p>
+
+    <div class="picker">
+      <input type="file" id="file-input" accept="image/png,image/jpeg,image/webp,image/bmp" />
+      <label for="file-input">Choose an image</label>
+    </div>
+
+    <img id="preview" alt="" hidden />
+
+    <button id="run" disabled>Run OCR</button>
+
+    <p id="status" role="status" aria-live="polite"></p>
+
+    <section id="result-section" hidden>
+      <h2>Recognized text</h2>
+      <textarea id="result" readonly rows="10"></textarea>
+      <button id="copy">Copy text</button>
+      <button id="download">Download .txt</button>
+    </section>
+
+    <footer>
+      <p>
+        No account, no server, no telemetry. Source on
+        <a href="https://github.com/sayjavajava/quiet-ocr">GitHub</a>.
+        Sibling project: <a href="https://github.com/sayjavajava/offline-pdf-utility">OffGridPDF</a>
+        (fully offline PDF tools — a stricter, zero-network guarantee this project does not make;
+        see this repo's README for the difference).
+      </p>
+    </footer>
+  </main>
+
+  <script src="vendor/tesseract.min.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

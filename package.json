@@ -1,0 +1,20 @@
+{
+  "name": "quiet-ocr",
+  "private": true,
+  "version": "0.1.0",
+  "description": "OCR that runs entirely in your browser. Loads its own code from the network, never uploads your files.",
+  "license": "GPL-3.0-or-later",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/sayjavajava/quiet-ocr.git"
+  },
+  "type": "module",
+  "scripts": {
+    "build": "node scripts/copy-vendor-assets.mjs",
+    "serve": "npm run build && python3 -m http.server 8080 -d public"
+  },
+  "devDependencies": {
+    "@tesseract.js-data/eng": "1.0.0",
+    "tesseract.js": "^7.0.0"
+  }
+}
