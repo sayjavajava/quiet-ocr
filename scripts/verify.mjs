@@ -33,6 +33,25 @@ function readDocxText(docxBytes) {
   return xml.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
 }
 
+/**
+ * Splits a .docx's paragraphs back into per-Word-page text, using the same
+ * <w:pageBreakBefore/> marker docx-export.js writes (see its comment on
+ * why that's the real element, not w:type="page"). Needed to check
+ * page-by-page word accuracy on a .docx built from imperfect OCR text
+ * (readDocxText alone would only give one blob for the whole document).
+ */
+function readDocxPages(docxBytes) {
+  const xml = strFromU8(unzipSync(docxBytes)["word/document.xml"]);
+  const paragraphs = xml.match(/<w:p(?:\s[^>]*)?>[\s\S]*?<\/w:p>/g) ?? [];
+  const pages = [[]];
+  for (const p of paragraphs) {
+    if (p.includes("<w:pageBreakBefore/>") && pages[pages.length - 1].length > 0) pages.push([]);
+    const text = [...p.matchAll(/<w:t(?:\s[^>]*)?>([\s\S]*?)<\/w:t>/g)].map((m) => m[1]).join("");
+    pages[pages.length - 1].push(text);
+  }
+  return pages.map((lines) => lines.join("\n"));
+}
+
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const PUBLIC_DIR = `${ROOT}public`;
 const FIXTURE_DIR = `${ROOT}test/fixtures/`;
@@ -358,6 +377,47 @@ try {
       failed = true;
     } else {
       console.log("✓ A multi-page PDF downloads as one .docx with a real page break between each page.");
+    }
+    await context.close();
+  }
+
+  // --- docx export from a *degraded* PDF, not just clean vector text.
+  // sample-multipage.pdf above is clean vector text, which the .docx step
+  // just has to carry through faithfully; scanned-multipage.pdf's pages
+  // are raster images with real, imperfect OCR output — this checks the
+  // .docx export step doesn't lose or mangle that on the way out, using
+  // the same word-accuracy bar (scripts/text-accuracy.mjs) the fixture
+  // loop above already established for this fixture, not exact match. ---
+  {
+    console.log(`\n=== docx export: degraded/scanned PDF -> .docx with real OCR imperfections intact ===`);
+    const pdfFixture = manifest.find((f) => f.name === "scanned-multipage");
+    const context = await browser.newContext();
+    const page = await context.newPage();
+    page.on("pageerror", (e) => console.error("[pageerror]", String(e)));
+
+    await page.goto(`${origin}/index.html`, { waitUntil: "load" });
+    await page.setInputFiles("#file-input", `${FIXTURE_DIR}${pdfFixture.file}`);
+    await page.waitForFunction(() => !document.getElementById("run").disabled, { timeout: 20000 });
+    await page.click("#run");
+    await page.waitForFunction(() => document.getElementById("status").textContent === "Done.", { timeout: 60000 });
+
+    const [download] = await Promise.all([page.waitForEvent("download"), page.click("#download")]);
+    const bytes = new Uint8Array(readFileSync(await download.path()));
+    const pages = readDocxPages(bytes);
+    const threshold = THRESHOLDS[pdfFixture.name];
+
+    let allOk = pages.length === pdfFixture.expectedPages.length;
+    pdfFixture.expectedPages.forEach((expected, i) => {
+      const accuracy = pages[i] ? wordAccuracy(expected, pages[i]) : 0;
+      const ok = accuracy >= threshold;
+      allOk &&= ok;
+      console.log(`  page ${i + 1}: ${(accuracy * 100).toFixed(1)}% ${ok ? "✓" : "✗"} — ${JSON.stringify(pages[i])}`);
+    });
+    if (!allOk) {
+      console.error("✗ FAILED: the degraded PDF's .docx export lost accuracy or page structure vs. the on-screen preview.");
+      failed = true;
+    } else {
+      console.log("✓ Degraded-PDF .docx export preserves per-page structure and real OCR accuracy.");
     }
     await context.close();
   }
