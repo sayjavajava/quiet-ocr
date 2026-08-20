@@ -11,6 +11,7 @@ import { join, normalize, extname } from "node:path";
 const CONTENT_TYPES = {
   ".html": "text/html; charset=utf-8",
   ".js": "text/javascript; charset=utf-8",
+  ".mjs": "text/javascript; charset=utf-8",
   ".css": "text/css; charset=utf-8",
   ".gz": "application/gzip",
   ".wasm": "application/wasm",

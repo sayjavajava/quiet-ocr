@@ -2,7 +2,7 @@
 
 [![License: GPL-3.0-or-later](https://img.shields.io/github/license/sayjavajava/quiet-ocr)](LICENSE)
 
-Pull text out of an image, entirely in your browser.
+Pull text out of images or PDFs, entirely in your browser.
 
 ## What it actually promises — read this before trusting it
 
@@ -14,11 +14,13 @@ verified-in-CI promise of zero network requests, ever. If you need that guarante
 project instead — it doesn't do OCR, and this doesn't do PDF editing, and neither pretends to be
 the other.
 
-**What QuietOCR does promise: your image is never uploaded, to this site or anywhere else.**
-Once the page has loaded, recognition runs entirely client-side — in WebAssembly, on your
-machine — via [Tesseract](https://github.com/tesseract-ocr/tesseract) compiled to WebAssembly by
-[tesseract.js](https://github.com/naptha/tesseract.js). The file you select never leaves the
-browser tab.
+**What QuietOCR does promise: your file is never uploaded, to this site or anywhere else.** Once
+the page has loaded, recognition runs entirely client-side — in WebAssembly, on your machine — via
+[Tesseract](https://github.com/tesseract-ocr/tesseract) compiled to WebAssembly by
+[tesseract.js](https://github.com/naptha/tesseract.js). A PDF is rasterized into page images
+entirely in-browser too (via a self-hosted [pdf.js](https://github.com/mozilla/pdf.js)) before
+those images go through the same OCR path — the PDF itself never leaves the tab either. Nothing
+you select ever leaves the browser tab.
 
 ## Why this exists
 
@@ -37,11 +39,11 @@ data" guarantee — sidesteps that blocker entirely and lets this use the well-t
 Don't take it on faith — check it:
 
 1. Open this page's DevTools → Network tab before selecting a file.
-2. Load an image and click "Run OCR".
+2. Load an image or PDF and click "Run OCR".
 3. Watch the Network tab. You'll see the initial page load fetch a handful of same-origin files
-   under `/vendor/` (the OCR engine + trained-data) — and nothing else, ever, no matter how many
-   images you run through it afterward. No request's body or URL contains anything derived from
-   your image.
+   under `/vendor/` (the OCR engine, pdf.js, and trained-data) — and nothing else, ever, no matter
+   how many images or PDFs you run through it afterward. No request's body or URL contains
+   anything derived from your file.
 
 This isn't asserted from memory — the identical check (a real headless browser, network requests
 logged, a known test image run through the exact code this page uses) was run against a
@@ -52,8 +54,8 @@ fetches.
 ## Development
 
 ```bash
-npm install         # pulls tesseract.js, tesseract.js-core (transitively), and English trained-data
-npm run build        # copies the OCR engine + trained-data into public/vendor/ (gitignored)
+npm install         # pulls tesseract.js, tesseract.js-core (transitively), English trained-data, and pdf.js
+npm run build        # copies the OCR engine, pdf.js, and trained-data into public/vendor/ (gitignored)
 npm run serve         # build, then serve public/ at http://localhost:8080
 ```
 
@@ -63,17 +65,21 @@ the trust chain and a pinned, known version instead of "whatever the CDN current
 
 ## Scope, for now
 
-English only, image input only (PNG/JPEG/WebP/BMP) — no PDF support yet. Rasterizing a PDF page
-and feeding it through the same pipeline is a natural follow-up, not a redesign, if there's
-demand for it.
+English only. Input is images (PNG/JPEG/WebP/BMP) and PDFs — a selected PDF is rasterized into
+one page-image per page (client-side, via a self-hosted `pdfjs-dist`) before those images go
+through the exact same OCR path as directly-selected images, so PDF pages show up in the file
+list exactly like images do, each with its own status.
 
-You can select multiple images at once — they're recognized one at a time against a single OCR
-engine instance (reused across the batch, rather than paying the ~500ms engine-load cost per
-image — see [`docs/PERFORMANCE.md`](docs/PERFORMANCE.md)), with each result labelled by source
-filename in the combined output. There's no page limit enforced, but a full page at scanning
-resolution takes ~17 seconds on its own, so a large batch is a genuinely long-running operation
-with no pause/cancel yet — that's a reasonable next thing to add if batches grow large in
-practice.
+You can select multiple images and/or PDFs at once — every page/image is recognized one at a
+time against a single OCR engine instance (reused across the whole run, rather than paying the
+~500ms engine-load cost per item — see [`docs/PERFORMANCE.md`](docs/PERFORMANCE.md)), with each
+result labelled by source filename in the combined output. There's no page-count limit or
+time estimate shown before running, but a full page at scanning resolution takes ~17 seconds on
+its own, so a large batch or a large PDF is a genuinely long-running operation with no
+pause/cancel yet — see [`docs/PERFORMANCE.md`](docs/PERFORMANCE.md)'s "PDF input" section for
+the real numbers this is based on, including a real browser-compatibility issue found and fixed
+while building PDF support (a very recent JS engine method pdf.js depends on that not all
+current browsers have yet).
 
 ## Performance
 

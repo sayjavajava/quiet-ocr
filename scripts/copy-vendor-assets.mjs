@@ -32,6 +32,13 @@ const FILES = [
   ["tesseract.js/dist/tesseract.min.js", "tesseract.min.js"],
   ["tesseract.js-core/tesseract-core-lstm.wasm.js", "tesseract-core-lstm.wasm.js"],
   ["@tesseract.js-data/eng/4.0.0_best_int/eng.traineddata.gz", "eng.traineddata.gz"],
+  // PDF input (F-3): rasterizes each page to an image before handing it to
+  // the same OCR pipeline images already use. Non-legacy build — this page
+  // is only ever served over http(s), not file://, so none of the
+  // worker-construction workarounds the offline-pdf-utility sibling needs
+  // apply here; a plain self-hosted workerSrc URL is enough.
+  ["pdfjs-dist/build/pdf.min.mjs", "pdf.min.mjs"],
+  ["pdfjs-dist/build/pdf.worker.min.mjs", "pdf.worker.min.mjs"],
 ];
 
 mkdirSync(OUT_DIR, { recursive: true });

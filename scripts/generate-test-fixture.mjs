@@ -19,6 +19,7 @@
  *                     contrast, blurred, with per-pixel noise
  */
 import { chromium } from "playwright";
+import { PDFDocument, StandardFonts, rgb } from "pdf-lib";
 import { writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
@@ -141,12 +142,34 @@ await page.evaluate(({ lines, seed }) => {
 }, { lines: PARAGRAPH_LINES, seed: NOISE_SEED });
 writeFileSync(`${FIXTURE_DIR}noisy-scan.png`, await toPng());
 
+// --- sample-multipage: a real PDF (not an image saved as .pdf), to exercise
+// the PDF-input pipeline (pdf-to-images.js rasterizes each page via pdf.js,
+// then the existing image OCR pipeline runs on the result — see F-3 in the
+// private backlog). Built directly with pdf-lib; no browser rendering is
+// needed to *construct* a PDF, only to later rasterize it, which is exactly
+// the step this fixture exists to test. ---
+export const PDF_PAGE_TEXTS = [
+  "Page one: purchase order 4471, ship to Springfield warehouse.",
+  "Page two: quantity 250 units, unit price $6.40, subtotal $1,600.00.",
+  "Page three: approved by J Ramirez on the fourteenth of March.",
+];
+{
+  const pdfDoc = await PDFDocument.create();
+  const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
+  for (const text of PDF_PAGE_TEXTS) {
+    const page = pdfDoc.addPage([612, 200]);
+    page.drawText(text, { x: 50, y: 120, size: 18, font, color: rgb(0, 0, 0) });
+  }
+  writeFileSync(`${FIXTURE_DIR}sample-multipage.pdf`, await pdfDoc.save());
+}
+
 // --- manifest: what each fixture expects, and how strictly to check it ---
 const manifest = [
   { name: "sample-invoice", file: "sample-invoice.png", expectedText: INVOICE_TEXT, mode: "exact" },
   { name: "paragraph", file: "paragraph.png", expectedText: PARAGRAPH_LINES.join(" "), mode: "word-accuracy" },
   { name: "table", file: "table.png", expectedText: TABLE_LINES.join(" "), mode: "word-accuracy" },
   { name: "noisy-scan", file: "noisy-scan.png", expectedText: PARAGRAPH_LINES.join(" "), mode: "word-accuracy" },
+  { name: "sample-multipage", file: "sample-multipage.pdf", expectedPages: PDF_PAGE_TEXTS, mode: "pdf-word-accuracy" },
 ];
 writeFileSync(`${FIXTURE_DIR}manifest.json`, JSON.stringify(manifest, null, 2) + "\n");
 

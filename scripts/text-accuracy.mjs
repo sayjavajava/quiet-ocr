@@ -42,3 +42,25 @@ export function wordAccuracy(expected, actual) {
   const distance = editDistance(expectedWords, actualWords);
   return Math.max(0, 1 - distance / expectedWords.length);
 }
+
+/**
+ * Splits app.js's multi-file combined output (`=== name ===` header lines,
+ * each followed by that file's recognized text) back into `{ name, text }`
+ * blocks, in order — used to score each page of a rasterized PDF (or each
+ * file of a batch) independently instead of accuracy-scoring the whole
+ * concatenated output as one blob, which would hide which specific
+ * page/file is wrong. Locates blocks by header position rather than
+ * splitting on a fixed "\n\n" separator, because Tesseract's own output
+ * often ends a block with extra trailing newlines of its own — a fixed
+ * two-newline split silently merges the next header into the previous
+ * block's text when that happens.
+ */
+export function parseLabelledBlocks(combinedText) {
+  const headers = [...combinedText.matchAll(/^=== (.+) ===$/gm)];
+  if (headers.length === 0) return [{ name: null, text: combinedText }];
+  return headers.map((header, i) => {
+    const start = header.index + header[0].length;
+    const end = i + 1 < headers.length ? headers[i + 1].index : combinedText.length;
+    return { name: header[1], text: combinedText.slice(start, end).replace(/^\n+/, "") };
+  });
+}

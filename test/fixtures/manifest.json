@@ -22,5 +22,15 @@
     "file": "noisy-scan.png",
     "expectedText": "The quarterly report shows a steady increase in revenue across all regions. Customer satisfaction scores improved by 12% compared to the previous period, while operational costs remained flat. The board recommends continuing the current strategy through the next fiscal year.",
     "mode": "word-accuracy"
+  },
+  {
+    "name": "sample-multipage",
+    "file": "sample-multipage.pdf",
+    "expectedPages": [
+      "Page one: purchase order 4471, ship to Springfield warehouse.",
+      "Page two: quantity 250 units, unit price $6.40, subtotal $1,600.00.",
+      "Page three: approved by J Ramirez on the fourteenth of March."
+    ],
+    "mode": "pdf-word-accuracy"
   }
 ]
