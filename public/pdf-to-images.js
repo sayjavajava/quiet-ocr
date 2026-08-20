@@ -13,16 +13,29 @@
 // feature (per MDN, it only reached cross-browser "newly available" status
 // in early 2026), so most real users' browsers today still don't have it
 // natively — this isn't a workaround for one outdated test environment,
-// it's required for PDF input to work for real visitors. Minimal shim,
-// matching the spec (callback invoked with the key): only installed if the
-// native method is actually missing.
-for (const Ctor of [Map, WeakMap]) {
-  if (!Ctor.prototype.getOrInsertComputed) {
-    Ctor.prototype.getOrInsertComputed = function (key, callback) {
-      if (!this.has(key)) this.set(key, callback(key));
-      return this.get(key);
-    };
-  }
+// it's required for PDF input to work for real visitors.
+//
+// Minimal shim, matching the spec (callback invoked with the key), added
+// via a fixed, literal property name on each built-in's prototype — not a
+// dynamic key, and only installed when the native method is genuinely
+// missing (a no-op the moment browsers catch up).
+function getOrInsertComputedShim(key, callback) {
+  if (!this.has(key)) this.set(key, callback(key));
+  return this.get(key);
+}
+if (!Map.prototype.getOrInsertComputed) {
+  Object.defineProperty(Map.prototype, "getOrInsertComputed", {
+    value: getOrInsertComputedShim,
+    writable: true,
+    configurable: true,
+  });
+}
+if (!WeakMap.prototype.getOrInsertComputed) {
+  Object.defineProperty(WeakMap.prototype, "getOrInsertComputed", {
+    value: getOrInsertComputedShim,
+    writable: true,
+    configurable: true,
+  });
 }
 
 import * as pdfjsLib from './vendor/pdf.min.mjs';
