@@ -415,6 +415,62 @@ try {
     await context.close();
   }
 
+  // --- PDF page-render failure: one page of a real PDF fails to rasterize
+  // while the pages around it render fine. Real byte-level corruption was
+  // tried first (a garbled FlateDecode content stream, an absurd
+  // 200000x200000pt page) and pdf.js recovered from both without
+  // throwing — genuinely resilient by design, not a gap in these attempts.
+  // This uses targeted fault injection instead: pdf.js's page.render()
+  // calls canvas.getContext('2d') internally exactly once per page when
+  // given a raw canvas (see public/pdf-to-images.js), so failing that call
+  // on the 2nd invocation reliably exercises the real per-page try/catch
+  // without needing an artificially-corrupted fixture. ---
+  {
+    console.log(`\n=== PDF page-render failure: page 2 of 3 fails, 1 and 3 still render ===`);
+    const pdfFixture = manifest.find((f) => f.name === "sample-multipage");
+    const context = await browser.newContext();
+    const page = await context.newPage();
+    page.on("pageerror", (e) => console.error("[pageerror]", String(e)));
+
+    await page.goto(`${origin}/index.html`, { waitUntil: "load" });
+    await page.evaluate(() => {
+      let getContextCalls = 0;
+      const original = HTMLCanvasElement.prototype.getContext;
+      HTMLCanvasElement.prototype.getContext = function (...args) {
+        getContextCalls += 1;
+        if (getContextCalls === 2) throw new Error("Injected failure for page 2");
+        return original.apply(this, args);
+      };
+    });
+    await page.setInputFiles("#file-input", `${FIXTURE_DIR}${pdfFixture.file}`);
+    await page.waitForFunction(() => !document.getElementById("run").disabled, { timeout: 20000 });
+
+    const statusAfterRender = await page.textContent("#status");
+    const namesAfterRender = await page.$$eval("#file-list .file-name", (els) => els.map((e) => e.textContent));
+    const runLabel = await page.textContent("#run");
+
+    await page.click("#run");
+    await page.waitForFunction(() => document.getElementById("status").textContent === "Done.", { timeout: 30000 });
+    const preview = await page.inputValue("#result");
+
+    console.log(`Status after render: ${JSON.stringify(statusAfterRender)}`);
+    console.log(`File list after render: ${JSON.stringify(namesAfterRender)}`);
+
+    const ok = statusAfterRender.includes("Rendered with errors") && statusAfterRender.includes("page 2")
+      && namesAfterRender.length === 2
+      && namesAfterRender[0] === `${pdfFixture.name}-page-1.png` && namesAfterRender[1] === `${pdfFixture.name}-page-3.png`
+      && runLabel === "Run OCR on 2 images"
+      && preview.includes(pdfFixture.expectedPages[0]) && preview.includes(pdfFixture.expectedPages[2])
+      && !preview.includes(pdfFixture.expectedPages[1]);
+    if (!ok) {
+      console.error("✗ FAILED: a page-render failure didn't degrade the way it should.");
+      failed = true;
+    } else {
+      console.log("✓ Page 2 failed visibly; pages 1 and 3 still rendered, ran, and recognized correctly.");
+    }
+    await context.close();
+  }
+
   // --- Race conditions: real UI state can be manipulated faster than a
   // single run's async flow, and the fixes for these were found by actually
   // reproducing the bugs first, not by inspection alone. ---
