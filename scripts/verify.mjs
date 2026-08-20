@@ -276,6 +276,57 @@ try {
     await context.close();
   }
 
+  // --- Large batch: accept path, not just dismiss. Only checking dismiss
+  // (above) would miss real bugs in the actual run — including a genuine
+  // one found by adding this: 26 copies of the same fixture all produced
+  // .docx files named "sample-invoice.docx", which zipSync silently
+  // collapsed to a single entry, losing 25 of the 26 recognized documents
+  // with no error. Fixed in app.js (uniqueDocxName) and verified here:
+  // 26 real, distinct, correctly-numbered .docx entries, not just that
+  // the run completes. Real measured time for this: ~8s, not the
+  // conservative ~45s the confirmation estimate itself uses — small and
+  // cheap enough for every CI run, not just a manual check. ---
+  {
+    console.log(`\n=== large batch (26x sample-invoice, accept path + duplicate-name dedup) ===`);
+    const invoiceFixture = manifest.find((f) => f.name === "sample-invoice");
+    const manyPaths = Array.from({ length: 26 }, () => `${FIXTURE_DIR}${invoiceFixture.file}`);
+
+    const context = await browser.newContext();
+    const page = await context.newPage();
+    page.on("pageerror", (e) => console.error("[pageerror]", String(e)));
+    page.on("dialog", (dialog) => dialog.accept());
+
+    await page.goto(`${origin}/index.html`, { waitUntil: "load" });
+    await page.setInputFiles("#file-input", manyPaths);
+    await page.waitForFunction(() => !document.getElementById("run").disabled);
+    await page.click("#run");
+    await page.waitForFunction(() => document.getElementById("status").textContent === "Done.", { timeout: 60000 });
+
+    const fileStatuses = await page.$$eval("#file-list .file-status", (els) => els.map((e) => e.textContent));
+    const [download] = await Promise.all([page.waitForEvent("download"), page.click("#download")]);
+    const zipBytes = new Uint8Array(readFileSync(await download.path()));
+    const entries = unzipSync(zipBytes);
+    const names = Object.keys(entries).sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+    const expectedNames = Array.from({ length: 26 }, (_, i) => (i === 0 ? "sample-invoice.docx" : `sample-invoice (${i + 1}).docx`)).sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+
+    console.log(`26/26 statuses "Done": ${fileStatuses.every((s) => s === "Done")}`);
+    console.log(`Zip entry count: ${names.length} (expected 26)`);
+
+    const ok = fileStatuses.length === 26 && fileStatuses.every((s) => s === "Done")
+      && names.length === 26
+      && JSON.stringify(names) === JSON.stringify(expectedNames)
+      && readDocxText(entries["sample-invoice.docx"]).includes(invoiceFixture.expectedText)
+      && readDocxText(entries["sample-invoice (13).docx"]).includes(invoiceFixture.expectedText)
+      && readDocxText(entries["sample-invoice (26).docx"]).includes(invoiceFixture.expectedText);
+    if (!ok) {
+      console.error("✗ FAILED: accepting a large batch of same-named files didn't complete correctly, or lost/misnamed entries in the zip.");
+      failed = true;
+    } else {
+      console.log("✓ All 26 recognized correctly; the zip has 26 distinct, correctly-numbered .docx entries, none lost to a name collision.");
+    }
+    await context.close();
+  }
+
   // --- Word-document export: the actual downloaded file, not just the
   // on-screen preview text, is what users take away — verify the real
   // bytes Playwright captures from a real download event, not just that

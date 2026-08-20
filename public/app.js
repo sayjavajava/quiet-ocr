@@ -259,14 +259,34 @@ runButton.addEventListener('click', async () => {
     // built at selection time, see the change handler above), not per
     // rendered image — an N-page PDF should come back as one N-page Word
     // document, not N single-page ones.
+    // Two files with the same name (a real scenario — a repeated fixture
+    // in a test batch, or genuinely two files named "scan.pdf" from two
+    // different folders) would otherwise both produce "scan.docx" and
+    // silently collapse into one entry when zipped, losing one of the two
+    // documents with no error or warning. uniqueDocxName is computed
+    // synchronously as the first thing in each iteration — before the
+    // async buildDocxBlob call — so Array.prototype.map's guaranteed
+    // in-order synchronous invocation keeps `seenNames` correct regardless
+    // of which iteration's blob finishes building first.
+    const seenNames = new Map();
+    function uniqueDocxName(originalName) {
+      const base = `${originalName.replace(/\.[^.]+$/, '')}.docx`;
+      const count = (seenNames.get(base) ?? 0) + 1;
+      seenNames.set(base, count);
+      if (count === 1) return base;
+      const dot = base.lastIndexOf('.');
+      return `${base.slice(0, dot)} (${count})${base.slice(dot)}`;
+    }
+
     docxOutputs = await Promise.all(
       fileGroups.map(async (group) => {
+        const name = uniqueDocxName(group.name);
         const pages = group.indices.map((i) => {
           const r = results[i];
           return r.error ? `[Error recognizing this page: ${r.error}]` : r.text;
         });
         const blob = await buildDocxBlob(pages);
-        return { name: `${group.name.replace(/\.[^.]+$/, '')}.docx`, blob };
+        return { name, blob };
       }),
     );
     downloadButton.textContent = docxOutputs.length > 1 ? 'Download .zip' : 'Download .docx';
