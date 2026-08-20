@@ -54,8 +54,8 @@ fetches.
 ## Development
 
 ```bash
-npm install         # pulls tesseract.js, tesseract.js-core (transitively), English trained-data, and pdf.js
-npm run build        # copies the OCR engine, pdf.js, and trained-data into public/vendor/ (gitignored)
+npm install         # pulls tesseract.js, tesseract.js-core (transitively), English trained-data, pdf.js, docx, and fflate
+npm run build        # copies the OCR engine, pdf.js, trained-data, docx, and fflate into public/vendor/ (gitignored)
 npm run serve         # build, then serve public/ at http://localhost:8080
 ```
 
@@ -73,13 +73,21 @@ list exactly like images do, each with its own status.
 You can select multiple images and/or PDFs at once — every page/image is recognized one at a
 time against a single OCR engine instance (reused across the whole run, rather than paying the
 ~500ms engine-load cost per item — see [`docs/PERFORMANCE.md`](docs/PERFORMANCE.md)), with each
-result labelled by source filename in the combined output. There's no page-count limit or
-time estimate shown before running, but a full page at scanning resolution takes ~17 seconds on
-its own, so a large batch or a large PDF is a genuinely long-running operation with no
-pause/cancel yet — see [`docs/PERFORMANCE.md`](docs/PERFORMANCE.md)'s "PDF input" section for
-the real numbers this is based on, including a real browser-compatibility issue found and fixed
-while building PDF support (a very recent JS engine method pdf.js depends on that not all
-current browsers have yet).
+result labelled by source filename in the on-screen preview. Selecting more than 25 pages/images
+shows a time estimate and asks for confirmation before starting, since a large run is genuinely
+long — a full page at scanning resolution takes ~17 seconds on its own, and there's no
+pause/cancel once it's running. See [`docs/PERFORMANCE.md`](docs/PERFORMANCE.md)'s "PDF input"
+section for the real numbers this is based on, including a real browser-compatibility issue found
+and fixed while building PDF support (a very recent JS engine method pdf.js depends on that not
+all current browsers have yet).
+
+**Output is a real Word document, not a text dump.** Each image or PDF becomes its own `.docx`
+(a multi-page PDF becomes one `.docx` with a real page break between each page's text, not a
+wall of text); select more than one file and you get a single `.zip` of all the generated `.docx`
+files. Both are built and packaged entirely client-side (self-hosted
+[`docx`](https://github.com/dolanmiu/docx) and [`fflate`](https://github.com/101arrowz/fflate)) —
+nothing is uploaded to generate them. The on-screen text preview and "Copy text" are still there
+for quickly grabbing a snippet without downloading anything.
 
 ## Performance
 

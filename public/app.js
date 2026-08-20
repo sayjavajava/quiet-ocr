@@ -8,6 +8,8 @@
 // and pdf.js) — all same-origin, from public/vendor/, not a third-party CDN.
 
 import { pdfToImageFiles, isPdfFile } from './pdf-to-images.js';
+import { buildDocxBlob } from './docx-export.js';
+import { zipBlobs } from './zip-export.js';
 
 const fileInput = document.getElementById('file-input');
 const fileList = document.getElementById('file-list');
@@ -19,6 +21,14 @@ const copyButton = document.getElementById('copy');
 const downloadButton = document.getElementById('download');
 
 let selectedFiles = [];
+// One entry per originally-selected file (not per rendered PDF page):
+// `{ name, indices }`, where `indices` are that file's position(s) in
+// `selectedFiles`/`results` — a plain image has one index, a PDF has one
+// per rendered page. This is what lets the .docx export below turn a
+// 5-page PDF back into a single 5-page Word document instead of 5 separate
+// one-page ones, even though OCR itself still runs per rendered page.
+let fileGroups = [];
+let docxOutputs = []; // `{ name, blob }[]`, rebuilt after every run
 let previewUrls = [];
 let worker = null;
 
@@ -112,9 +122,11 @@ fileInput.addEventListener('change', async () => {
   if (hasPdf) statusEl.textContent = 'Rendering PDF page(s)…';
 
   const expanded = [];
+  const groups = [];
   const renderErrors = [];
   for (const file of rawFiles) {
     if (!isPdfFile(file)) {
+      groups.push({ name: file.name, indices: [expanded.length] });
       expanded.push(file);
       continue;
     }
@@ -124,6 +136,8 @@ fileInput.addEventListener('change', async () => {
           renderErrors.push(`${file.name} page ${pageNumber}: ${error?.message ?? error}`);
         },
       });
+      const startIndex = expanded.length;
+      groups.push({ name: file.name, indices: pages.map((_, i) => startIndex + i) });
       expanded.push(...pages);
     } catch (error) {
       renderErrors.push(`${file.name}: ${error?.message ?? error}`);
@@ -131,6 +145,7 @@ fileInput.addEventListener('change', async () => {
   }
 
   selectedFiles = expanded;
+  fileGroups = groups;
   statusEl.textContent = renderErrors.length > 0
     ? `Rendered with errors — ${renderErrors.join('; ')}`
     : '';
@@ -204,6 +219,24 @@ runButton.addEventListener('click', async () => {
     resultEl.value = buildCombinedText(results);
     resultSection.hidden = false;
 
+    // One .docx per originally-selected file (a multi-page PDF's pages
+    // land on separate pages of the *same* document, via fileGroups —
+    // built at selection time, see the change handler above), not per
+    // rendered image — an N-page PDF should come back as one N-page Word
+    // document, not N single-page ones.
+    docxOutputs = await Promise.all(
+      fileGroups.map(async (group) => {
+        const pages = group.indices.map((i) => {
+          const r = results[i];
+          return r.error ? `[Error recognizing this page: ${r.error}]` : r.text;
+        });
+        const blob = await buildDocxBlob(pages);
+        return { name: `${group.name.replace(/\.[^.]+$/, '')}.docx`, blob };
+      }),
+    );
+    downloadButton.textContent = docxOutputs.length > 1 ? 'Download .zip' : 'Download .docx';
+    downloadButton.disabled = docxOutputs.length === 0;
+
     const allFailed = results.every((r) => r.error);
     statusEl.textContent = allFailed
       ? `Error: all ${results.length} file(s) failed to recognize`
@@ -226,13 +259,15 @@ copyButton.addEventListener('click', async () => {
   setTimeout(() => { copyButton.textContent = 'Copy text'; }, 1500);
 });
 
-downloadButton.addEventListener('click', () => {
-  const blob = new Blob([resultEl.value], { type: 'text/plain' });
+downloadButton.addEventListener('click', async () => {
+  if (docxOutputs.length === 0) return;
+
+  const { blob, filename } = docxOutputs.length === 1
+    ? { blob: docxOutputs[0].blob, filename: docxOutputs[0].name }
+    : { blob: await zipBlobs(docxOutputs), filename: 'ocr-results.zip' };
+
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
-  const filename = selectedFiles.length === 1
-    ? `${selectedFiles[0].name.replace(/\.[^.]+$/, '')}.txt`
-    : 'ocr-results.txt';
   a.href = url;
   a.download = filename;
   a.click();

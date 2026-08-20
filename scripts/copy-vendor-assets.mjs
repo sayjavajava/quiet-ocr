@@ -39,6 +39,18 @@ const FILES = [
   // apply here; a plain self-hosted workerSrc URL is enough.
   ["pdfjs-dist/build/pdf.min.mjs", "pdf.min.mjs"],
   ["pdfjs-dist/build/pdf.worker.min.mjs", "pdf.worker.min.mjs"],
+  // Word-document export: recognized text is handed to the user as a real
+  // .docx (or a .zip of several), not a plain-text download — see
+  // public/docx-export.js. `docx`'s dist/index.mjs is already a single,
+  // dependency-free bundled ES module (its own jszip/nanoid/xml-js
+  // dependencies are bundled in) — the same "self-hosted, no bundler
+  // needed" shape as pdf.js above, confirmed by inspecting the file before
+  // vendoring it, not assumed from the package's README alone.
+  ["docx/dist/index.mjs", "docx.mjs"],
+  // Only used to zip multiple generated .docx files together when more
+  // than one image/PDF was selected — fflate's browser build is also a
+  // single dependency-free ES module.
+  ["fflate/esm/browser.js", "fflate.mjs"],
 ];
 
 mkdirSync(OUT_DIR, { recursive: true });
