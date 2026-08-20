@@ -17,11 +17,11 @@
     </p>
 
     <div class="picker">
-      <input type="file" id="file-input" accept="image/png,image/jpeg,image/webp,image/bmp" />
-      <label for="file-input">Choose an image</label>
+      <input type="file" id="file-input" accept="image/png,image/jpeg,image/webp,image/bmp" multiple />
+      <label for="file-input">Choose image(s)</label>
     </div>
 
-    <img id="preview" alt="" hidden />
+    <ul id="file-list" hidden></ul>
 
     <button id="run" disabled>Run OCR</button>
 

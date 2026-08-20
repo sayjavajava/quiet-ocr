@@ -65,9 +65,15 @@ the trust chain and a pinned, known version instead of "whatever the CDN current
 
 English only, image input only (PNG/JPEG/WebP/BMP) — no PDF support yet. Rasterizing a PDF page
 and feeding it through the same pipeline is a natural follow-up, not a redesign, if there's
-demand for it. Also single-image only for now: the file input takes one image per run, not a
-batch of pages — see [`docs/PERFORMANCE.md`](docs/PERFORMANCE.md) for why that's a reasonable
-limit at the moment (a full page at scanning resolution already takes ~17 seconds on its own).
+demand for it.
+
+You can select multiple images at once — they're recognized one at a time against a single OCR
+engine instance (reused across the batch, rather than paying the ~500ms engine-load cost per
+image — see [`docs/PERFORMANCE.md`](docs/PERFORMANCE.md)), with each result labelled by source
+filename in the combined output. There's no page limit enforced, but a full page at scanning
+resolution takes ~17 seconds on its own, so a large batch is a genuinely long-running operation
+with no pause/cancel yet — that's a reasonable next thing to add if batches grow large in
+practice.
 
 ## Performance
 
