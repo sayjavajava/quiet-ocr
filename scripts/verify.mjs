@@ -47,6 +47,12 @@ const THRESHOLDS = {
   // differentiate DPI choices; it exists to regression-test the render
   // pipeline itself (PDF -> N page images -> OCR), not to stress accuracy.
   "sample-multipage": 0.9,
+  // scanned-multipage's pages are raster images (a real scanned/photographed
+  // PDF's actual shape), unlike sample-multipage's vector text — this one
+  // does test DPI-dependent accuracy. Measured at the shipped 150 DPI
+  // default: 95.0% (degraded page), 100% (clean page) — see
+  // scripts/measure-pdf-dpi.mjs and docs/PERFORMANCE.md.
+  "scanned-multipage": 0.85,
 };
 
 if (!existsSync(`${PUBLIC_DIR}/vendor/tesseract.min.js`)) {
@@ -201,6 +207,46 @@ try {
     }
 
     allRequests.push(...requests);
+    await context.close();
+  }
+
+  // --- large batch: above LARGE_BATCH_THRESHOLD (app.js), Run must ask for
+  // confirmation with a time estimate before starting, and dismissing it
+  // must not start anything. Real regression coverage for the confirm()
+  // gate, not just "the code exists" — dismissing it and confirming it are
+  // both checked against actual page state, not assumed from the dialog
+  // firing alone. ---
+  {
+    console.log(`\n=== large batch (26x sample-invoice, confirmation gate) ===`);
+    const invoiceFixture = manifest.find((f) => f.name === "sample-invoice");
+    const manyPaths = Array.from({ length: 26 }, () => `${FIXTURE_DIR}${invoiceFixture.file}`);
+
+    const context = await browser.newContext();
+    const page = await context.newPage();
+    page.on("pageerror", (e) => console.error("[pageerror]", String(e)));
+
+    await page.goto(`${origin}/index.html`, { waitUntil: "load" });
+    await page.setInputFiles("#file-input", manyPaths);
+    await page.waitForFunction(() => !document.getElementById("run").disabled);
+
+    let dialogMessage = null;
+    page.once("dialog", async (dialog) => {
+      dialogMessage = dialog.message();
+      await dialog.dismiss();
+    });
+    await page.click("#run");
+    await page.waitForTimeout(300);
+    const statusAfterDismiss = await page.textContent("#status");
+    const dialogMentionsCount = dialogMessage?.includes("26") ?? false;
+
+    if (!dialogMessage || !dialogMentionsCount || statusAfterDismiss !== "") {
+      console.error("✗ FAILED: large-batch confirmation gate didn't behave as expected.");
+      console.error(`  dialog fired: ${!!dialogMessage}, mentions item count: ${dialogMentionsCount}, status after dismiss (expected empty): ${JSON.stringify(statusAfterDismiss)}`);
+      failed = true;
+    } else {
+      console.log(`✓ Dialog fired ("${dialogMessage}") and dismissing it left the run un-started.`);
+    }
+
     await context.close();
   }
 

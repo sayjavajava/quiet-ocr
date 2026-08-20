@@ -22,6 +22,30 @@ let selectedFiles = [];
 let previewUrls = [];
 let worker = null;
 
+// A batch above this size gets a confirmation with a time estimate before
+// starting, rather than silently kicking off a multi-minute run on one
+// click — a large PDF (expanded to one page per item, see pdf-to-images.js)
+// is the realistic way this gets hit, not someone deliberately selecting
+// 25+ individual images.
+const LARGE_BATCH_THRESHOLD = 25;
+
+// ~1.7s/item is the real measured average across this project's fixtures
+// (docs/PERFORMANCE.md's DPI sweep against scanned-multipage.pdf — mixed
+// clean/degraded content, ~3.4s recognize for 2 pages), not a guess; ~0.5s
+// is the one-time engine-load cost, paid once per batch, not per item.
+const ESTIMATED_SECONDS_PER_ITEM = 1.7;
+const ESTIMATED_ENGINE_LOAD_SECONDS = 0.5;
+
+function estimateRunSeconds(itemCount) {
+  return ESTIMATED_ENGINE_LOAD_SECONDS + itemCount * ESTIMATED_SECONDS_PER_ITEM;
+}
+
+function formatEstimate(seconds) {
+  if (seconds < 60) return `~${Math.round(seconds)}s`;
+  const minutes = Math.round(seconds / 60);
+  return `~${minutes} minute${minutes === 1 ? '' : 's'}`;
+}
+
 function clearPreviewUrls() {
   for (const url of previewUrls) URL.revokeObjectURL(url);
   previewUrls = [];
@@ -120,6 +144,16 @@ fileInput.addEventListener('change', async () => {
 
 runButton.addEventListener('click', async () => {
   if (selectedFiles.length === 0) return;
+
+  if (selectedFiles.length > LARGE_BATCH_THRESHOLD) {
+    const estimate = formatEstimate(estimateRunSeconds(selectedFiles.length));
+    const proceed = window.confirm(
+      `This will run OCR on ${selectedFiles.length} pages/images, estimated ${estimate}. ` +
+      `There's no pause or cancel once it starts. Continue?`
+    );
+    if (!proceed) return;
+  }
+
   runButton.disabled = true;
   resultSection.hidden = true;
   statusEl.textContent = 'Loading OCR engine…';

@@ -65,7 +65,8 @@ await page.evaluate((lines) => {
   ctx.font = '24px sans-serif';
   lines.forEach((line, i) => ctx.fillText(line, 30, 50 + i * 38));
 }, PARAGRAPH_LINES);
-writeFileSync(`${FIXTURE_DIR}paragraph.png`, await toPng());
+const paragraphPng = await toPng();
+writeFileSync(`${FIXTURE_DIR}paragraph.png`, paragraphPng);
 
 // --- table: tabular/numeric data ---
 const TABLE_LINES = [
@@ -140,7 +141,8 @@ await page.evaluate(({ lines, seed }) => {
   ctx.filter = 'blur(1.1px)';
   ctx.drawImage(canvas, 0, 0);
 }, { lines: PARAGRAPH_LINES, seed: NOISE_SEED });
-writeFileSync(`${FIXTURE_DIR}noisy-scan.png`, await toPng());
+const noisyScanPng = await toPng();
+writeFileSync(`${FIXTURE_DIR}noisy-scan.png`, noisyScanPng);
 
 // --- sample-multipage: a real PDF (not an image saved as .pdf), to exercise
 // the PDF-input pipeline (pdf-to-images.js rasterizes each page via pdf.js,
@@ -163,6 +165,30 @@ export const PDF_PAGE_TEXTS = [
   writeFileSync(`${FIXTURE_DIR}sample-multipage.pdf`, await pdfDoc.save());
 }
 
+// --- scanned-multipage: a PDF whose pages are themselves raster images (a
+// real scanned/photographed PDF is exactly this shape — the "page" has no
+// vector content, pdf.js is just rasterizing an already-raster image) —
+// unlike sample-multipage.pdf above, which is clean vector text and
+// doesn't test how *upscaling an embedded raster image* at different
+// render DPIs affects OCR. Page 1 reuses noisy-scan.png (degraded);
+// page 2 reuses paragraph.png (clean) — both already-tuned, reproducible
+// fixtures, not new noise parameters to re-tune. Each page is sized in
+// PDF points 1:1 with the source image's pixels, so "render at N DPI"
+// means exactly "scale this image by N/72", the same math
+// pdf-to-images.js itself uses. ---
+{
+  const pdfDoc = await PDFDocument.create();
+  const noisyImage = await pdfDoc.embedPng(noisyScanPng);
+  const noisyPage = pdfDoc.addPage([noisyImage.width, noisyImage.height]);
+  noisyPage.drawImage(noisyImage, { x: 0, y: 0, width: noisyImage.width, height: noisyImage.height });
+
+  const paragraphImage = await pdfDoc.embedPng(paragraphPng);
+  const paragraphPage = pdfDoc.addPage([paragraphImage.width, paragraphImage.height]);
+  paragraphPage.drawImage(paragraphImage, { x: 0, y: 0, width: paragraphImage.width, height: paragraphImage.height });
+
+  writeFileSync(`${FIXTURE_DIR}scanned-multipage.pdf`, await pdfDoc.save());
+}
+
 // --- manifest: what each fixture expects, and how strictly to check it ---
 const manifest = [
   { name: "sample-invoice", file: "sample-invoice.png", expectedText: INVOICE_TEXT, mode: "exact" },
@@ -170,6 +196,12 @@ const manifest = [
   { name: "table", file: "table.png", expectedText: TABLE_LINES.join(" "), mode: "word-accuracy" },
   { name: "noisy-scan", file: "noisy-scan.png", expectedText: PARAGRAPH_LINES.join(" "), mode: "word-accuracy" },
   { name: "sample-multipage", file: "sample-multipage.pdf", expectedPages: PDF_PAGE_TEXTS, mode: "pdf-word-accuracy" },
+  {
+    name: "scanned-multipage",
+    file: "scanned-multipage.pdf",
+    expectedPages: [PARAGRAPH_LINES.join(" "), PARAGRAPH_LINES.join(" ")],
+    mode: "pdf-word-accuracy",
+  },
 ];
 writeFileSync(`${FIXTURE_DIR}manifest.json`, JSON.stringify(manifest, null, 2) + "\n");
 
