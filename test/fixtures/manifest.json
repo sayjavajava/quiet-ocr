@@ -32,5 +32,14 @@
       "Page three: approved by J Ramirez on the fourteenth of March."
     ],
     "mode": "pdf-word-accuracy"
+  },
+  {
+    "name": "scanned-multipage",
+    "file": "scanned-multipage.pdf",
+    "expectedPages": [
+      "The quarterly report shows a steady increase in revenue across all regions. Customer satisfaction scores improved by 12% compared to the previous period, while operational costs remained flat. The board recommends continuing the current strategy through the next fiscal year.",
+      "The quarterly report shows a steady increase in revenue across all regions. Customer satisfaction scores improved by 12% compared to the previous period, while operational costs remained flat. The board recommends continuing the current strategy through the next fiscal year."
+    ],
+    "mode": "pdf-word-accuracy"
   }
 ]

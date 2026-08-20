@@ -81,16 +81,39 @@ pipeline end-to-end (render → OCR):
 | 300 | 213 ms             | 1,820 ms               | 2,033 ms | 100% (3/3 pages) |
 
 This fixture is clean vector text rasterized to an image, not a scan — it doesn't
-differentiate accuracy by DPI the way `noisy-scan` differentiates image fixtures. **200 DPI
-was picked as the default** as a time/headroom balance: noticeably cheaper than 300 DPI with
-no accuracy loss on this fixture, while still rendering well above the resolution a genuinely
-degraded scanned PDF page would need for Tesseract to do well (general OCR guidance puts that
-around 300 DPI, hence keeping meaningful headroom above 150). This default isn't validated
-yet against an actually degraded/scanned PDF — only against clean vector text — see the
-private backlog (F-3) for that open item.
+differentiate accuracy by DPI the way `noisy-scan` differentiates image fixtures. The 200 DPI
+default originally picked from this table turned out to be unvalidated for the case that
+actually matters: a real scanned or photographed PDF's pages are themselves raster images
+(a photo, not vector text), and upscaling a raster image at different DPIs is a genuinely
+different operation than rendering vector text at different DPIs.
+
+**Re-measured against `test/fixtures/scanned-multipage.pdf`** (`scripts/measure-pdf-dpi.mjs`)
+— page 1 reuses the degraded `noisy-scan.png`, page 2 the clean `paragraph.png`, both already
+seeded/reproducible fixtures, sized in PDF points 1:1 with their pixel dimensions:
+
+| DPI | Render (2 pages) | Recognize (2 pages) | Total | Degraded-page accuracy | Clean-page accuracy |
+| --: | ----------------: | --------------------: | ------: | ------: | ------: |
+| 150 | 166 ms | 3,409 ms | 3,575 ms | 95.0% | 100% |
+| 200 | 156 ms | 3,699 ms | 3,854 ms | 90.0% | 100% |
+| 250 | 183 ms | 4,064 ms | 4,246 ms | 95.0% | 100% |
+| 300 | 273 ms | 4,559 ms | 4,831 ms | 92.5% | 100% |
+
+The clean page holds 100% at every DPI, same as the vector-text fixture. The degraded page
+does **not** show a "higher DPI is better" trend — it's non-monotonic across 150→300 DPI
+(95.0 → 90.0 → 95.0 → 92.5), because upscaling an already-raster image doesn't add real
+information; different scale factors just interact differently with pdf.js's own image
+resampling and Tesseract's preprocessing. Time, on the other hand, rises consistently —
+~35% slower at 300 DPI than 150 DPI for zero accuracy benefit.
+
+**`DEFAULT_RENDER_DPI` changed from 200 to 150** on this evidence: it's the cheapest option
+tested and its accuracy on the one fixture that actually stresses DPI choice (95.0%) beats
+the old 200 DPI default (90.0%) and ties the higher DPIs. `scanned-multipage` is now a
+permanent fixture in `test/fixtures/manifest.json`, checked in CI at an 85% threshold (real
+margin below the 95%/100% measured above), so this default is now actually regression-tested
+against raster/degraded content — not just vector text.
 
 **Known gaps, not yet addressed:** no page-count cap or time-estimate warning before running
 a large PDF (a 100-page PDF at these per-page costs is several minutes with no progress
 beyond the per-page status list), and rendering happens synchronously in the same
-main-thread loop that drives the UI — negligible at 3 pages, unverified at real-world PDF
+main-thread loop that drives the UI — negligible at 2-3 pages, unverified at real-world PDF
 sizes.

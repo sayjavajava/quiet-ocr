@@ -42,12 +42,20 @@ import * as pdfjsLib from './vendor/pdf.min.mjs';
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = 'vendor/pdf.worker.min.mjs';
 
-// pdf.js viewport scale is relative to the PDF's native 72 DPI. 200 DPI is
-// the measured middle ground between OCR accuracy and render+recognize
-// time — see docs/PERFORMANCE.md's "PDF input" section for the real
-// 150/200/300 DPI comparison this was picked from, run against
-// test/fixtures/sample-multipage.pdf via scripts/measure-fixture-accuracy.mjs.
-export const DEFAULT_RENDER_DPI = 200;
+// pdf.js viewport scale is relative to the PDF's native 72 DPI. 150 DPI —
+// see docs/PERFORMANCE.md's "PDF input" section for the real DPI sweep
+// (scripts/measure-pdf-dpi.mjs) this was picked from. The first version of
+// this default (200 DPI) was only validated against clean vector text,
+// which renders identically at every DPI and so validates nothing about
+// DPI choice specifically. Tested against a genuinely scanned-shaped PDF
+// (test/fixtures/scanned-multipage.pdf, a raster image as the page
+// content, the real shape of a phone-scanned document) instead: accuracy
+// on the degraded page didn't improve at higher DPI (90-95% across
+// 150-300 DPI, no clear trend — upscaling an already-raster image doesn't
+// add information), while render+recognize time rose ~35% from 150 to 300
+// DPI for no accuracy benefit. 150 DPI is the cheapest option that's not
+// worse than the others on real measurements.
+export const DEFAULT_RENDER_DPI = 150;
 
 export function isPdfFile(file) {
   return file.type === 'application/pdf' || /\.pdf$/i.test(file.name);
