@@ -21,6 +21,7 @@
  * install if the default download isn't available).
  */
 import { chromium, firefox, webkit, devices } from "playwright";
+import { AxeBuilder } from "@axe-core/playwright";
 import { readFileSync, existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { unzipSync, strFromU8 } from "fflate";
@@ -908,6 +909,52 @@ try {
       failed = true;
     } else {
       console.log("✓ Full run (tap Run, tap Download) works correctly on a real mobile viewport with touch input.");
+    }
+    await context.close();
+  }
+
+  // --- Accessibility: a real automated audit (axe-core, via
+  // @axe-core/playwright — the standard tool for this, not a hand-rolled
+  // check), against the real running page in three real states, not just
+  // the empty landing page. Interactive states can introduce issues the
+  // static markup doesn't have — the file list and result panel are both
+  // built dynamically by app.js, so they're exactly the parts a purely
+  // static HTML review would miss. ---
+  {
+    console.log(`\n=== accessibility: automated audit (axe-core) across real UI states ===`);
+    const invoiceFixture = manifest.find((f) => f.name === "sample-invoice");
+    const context = await browser.newContext();
+    const page = await context.newPage();
+    page.on("pageerror", (e) => console.error("[pageerror]", String(e)));
+
+    await page.goto(`${origin}/index.html`, { waitUntil: "load" });
+
+    let allViolations = [];
+    async function auditState(label) {
+      const results = await new AxeBuilder({ page }).analyze();
+      console.log(`  ${label}: ${results.violations.length} violation(s)`);
+      for (const v of results.violations) {
+        console.log(`    ✗ [${v.impact}] ${v.id}: ${v.help} (${v.nodes.length} node(s)) — ${v.helpUrl}`);
+        for (const node of v.nodes) console.log(`        ${node.target.join(" ")}`);
+      }
+      allViolations.push(...results.violations.map((v) => ({ ...v, state: label })));
+    }
+
+    await auditState("initial load (empty state)");
+
+    await page.setInputFiles("#file-input", `${FIXTURE_DIR}${invoiceFixture.file}`);
+    await waitForRunEnabled(page, { timeoutMs: 10000 });
+    await auditState("file selected (file-list populated)");
+
+    await page.click("#run");
+    await waitForStatus(page, (s) => s === "Done.", { timeoutMs: 30000, label: "the run to finish" });
+    await auditState("run complete (result panel visible)");
+
+    if (allViolations.length > 0) {
+      console.error(`✗ FAILED: ${allViolations.length} accessibility violation(s) found across ${new Set(allViolations.map((v) => v.state)).size} state(s) — see details above.`);
+      failed = true;
+    } else {
+      console.log("✓ No accessibility violations found in any of the three states audited.");
     }
     await context.close();
   }
