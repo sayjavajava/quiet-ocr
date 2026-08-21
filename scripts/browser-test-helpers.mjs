@@ -74,13 +74,18 @@ export async function selectFilesInBrowser(page, entries) {
  * controls directly, and a timeout here reports the last-seen status
  * text, which plain waitForFunction's TimeoutError does not.
  */
-export async function waitForStatus(page, predicate, { timeoutMs, intervalMs = 300, label = "status" } = {}) {
+export async function waitForStatus(page, predicate, options = {}) {
+  return waitForText(page, "#status", predicate, { label: "status", ...options });
+}
+
+/** General form of waitForStatus, for any element's text content — e.g. a button label that changes after a tap (see the "Copied!" check in verify.mjs). */
+export async function waitForText(page, selector, predicate, { timeoutMs, intervalMs = 300, label = selector } = {}) {
   const deadline = Date.now() + timeoutMs;
   for (;;) {
-    const status = await page.textContent("#status");
-    if (predicate(status)) return status;
+    const text = await page.textContent(selector);
+    if (predicate(text)) return text;
     if (Date.now() > deadline) {
-      throw new Error(`Timed out after ${timeoutMs}ms waiting for ${label}. Last status: ${JSON.stringify(status)}`);
+      throw new Error(`Timed out after ${timeoutMs}ms waiting for ${label}. Last text: ${JSON.stringify(text)}`);
     }
     await page.waitForTimeout(intervalMs);
   }

@@ -27,7 +27,7 @@ import { fileURLToPath } from "node:url";
 import { unzipSync, strFromU8 } from "fflate";
 import { startServer } from "./serve.mjs";
 import { wordAccuracy, parseLabelledBlocks } from "./text-accuracy.mjs";
-import { readDocxText, readDocxPages, selectFilesInBrowser, waitForStatus, waitForRunEnabled } from "./browser-test-helpers.mjs";
+import { readDocxText, readDocxPages, selectFilesInBrowser, waitForStatus, waitForRunEnabled, waitForText } from "./browser-test-helpers.mjs";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const PUBLIC_DIR = `${ROOT}public`;
@@ -93,6 +93,15 @@ if (engineName === "chromium" && process.env.PLAYWRIGHT_CHROMIUM_PATH) {
 }
 console.log(`Running against: ${engineName}`);
 const browser = await engine.launch(launchOptions);
+
+// `isMobile` is documented as unsupported on Firefox, so it's stripped
+// from a device profile's context options only on that engine — hasTouch
+// and the viewport itself, the parts that actually matter for the mobile
+// checks below, still apply on every engine.
+function mobileContextOptions(profile) {
+  const { isMobile, ...withoutIsMobile } = profile;
+  return engineName === "firefox" ? withoutIsMobile : profile;
+}
 
 let failed = false;
 const allRequests = [];
@@ -831,21 +840,26 @@ try {
   // sizing — clamp(), max-width, percentage padding) and had never
   // actually been driven with touch input before. Real device profiles
   // (viewport, user agent, hasTouch, isMobile) via Playwright's bundled
-  // `devices`, not guessed dimensions. `isMobile` is documented as
-  // unsupported on Firefox, so it's stripped from the context options
-  // only on that engine — hasTouch and the narrow viewport itself, the
-  // parts that actually matter for this check, apply on every engine. ---
+  // `devices`, not guessed dimensions — six of them: three narrow phones
+  // (including one Android alternative to the iPhone shapes), one phone
+  // in landscape (a real, common orientation this had never been checked
+  // in at all), and one tablet (768px — well past the layout's 640px
+  // max-width, so this also checks that the fluid design centers
+  // correctly once it stops being viewport-constrained, not just that it
+  // survives the narrowest phones). ---
   {
     console.log(`\n=== mobile: layout fits without horizontal overflow ===`);
     const layoutDevices = [
-      { name: "iPhone SE (320px, narrowest common device)", profile: devices["iPhone SE"] },
+      { name: "iPhone SE (320px, narrowest common phone)", profile: devices["iPhone SE"] },
+      { name: "Galaxy S9+ (320px Android)", profile: devices["Galaxy S9+"] },
+      { name: "iPhone 13 (390px)", profile: devices["iPhone 13"] },
       { name: "Pixel 7 (412px)", profile: devices["Pixel 7"] },
+      { name: "iPhone SE landscape (568x320)", profile: devices["iPhone SE landscape"] },
+      { name: "iPad Mini (768px tablet)", profile: devices["iPad Mini"] },
     ];
     let allOk = true;
     for (const { name, profile } of layoutDevices) {
-      const { isMobile, ...withoutIsMobile } = profile;
-      const contextOptions = engineName === "firefox" ? withoutIsMobile : profile;
-      const context = await browser.newContext(contextOptions);
+      const context = await browser.newContext(mobileContextOptions(profile));
       const page = await context.newPage();
       page.on("pageerror", (e) => console.error("[pageerror]", String(e)));
       await page.goto(`${origin}/index.html`, { waitUntil: "load" });
@@ -868,26 +882,25 @@ try {
       console.error("✗ FAILED: layout overflows or clips a key control at a real mobile viewport width.");
       failed = true;
     } else {
-      console.log("✓ No horizontal overflow and key controls stay in-bounds at both device widths.");
+      console.log("✓ No horizontal overflow and key controls stay in-bounds at any of the six device widths/orientations.");
     }
   }
 
-  // --- Mobile: a real end-to-end run driven with touch input (tap(), not
-  // click()) on a real narrow-viewport device profile — confirms the app's
-  // actual controls work under touch, not just mouse. File selection
-  // itself still goes through setInputFiles(): no automation tool can
-  // drive a real OS file-picker dialog regardless of touch/mobile
-  // emulation, on any engine — that's a platform limitation the app's own
-  // code has no way to satisfy either way. What this actually tests is
-  // that a touch tap on Run and Download work at all, on a real narrow
-  // viewport, all the way through a real recognition. ---
+  // --- Mobile: real end-to-end interactions driven with touch input
+  // (tap(), not click()) on real device profiles — confirms the app's
+  // actual controls work under touch, not just mouse, and across more
+  // than just the single-file happy path. File selection itself still
+  // goes through setInputFiles()/selectFilesInBrowser(): no automation
+  // tool can drive a real OS file-picker dialog regardless of
+  // touch/mobile emulation, on any engine — that's a platform limitation
+  // the app's own code has no way to satisfy either way. What these test
+  // is that Run, Download, Copy, and the large-batch confirm() dialog all
+  // work under a real tap, on real narrow viewports, through real
+  // recognition — not just the first one already covered. ---
   {
-    console.log(`\n=== mobile: full run driven by touch (tap) on iPhone SE viewport ===`);
+    console.log(`\n=== mobile touch: single file, tap Run + tap Download (iPhone SE) ===`);
     const invoiceFixture = manifest.find((f) => f.name === "sample-invoice");
-    const profile = devices["iPhone SE"];
-    const { isMobile, ...withoutIsMobile } = profile;
-    const contextOptions = engineName === "firefox" ? withoutIsMobile : profile;
-    const context = await browser.newContext(contextOptions);
+    const context = await browser.newContext(mobileContextOptions(devices["iPhone SE"]));
     const page = await context.newPage();
     page.on("pageerror", (e) => console.error("[pageerror]", String(e)));
 
@@ -905,10 +918,111 @@ try {
     console.log(`Recognized via touch-driven run: ${JSON.stringify(recognized)}`);
     console.log(`Download tapped successfully: ${downloadOk}`);
     if (!ok) {
-      console.error("✗ FAILED: a touch-driven run on a mobile viewport didn't complete correctly.");
+      console.error("✗ FAILED: a touch-driven single-file run didn't complete correctly.");
       failed = true;
     } else {
       console.log("✓ Full run (tap Run, tap Download) works correctly on a real mobile viewport with touch input.");
+    }
+    await context.close();
+  }
+
+  {
+    console.log(`\n=== mobile touch: multi-file batch, tap Run + tap Copy + tap Download -> zip (Pixel 7) ===`);
+    const invoiceFixture = manifest.find((f) => f.name === "sample-invoice");
+    const tableFixture = manifest.find((f) => f.name === "table");
+    const context = await browser.newContext(mobileContextOptions(devices["Pixel 7"]));
+    const page = await context.newPage();
+    page.on("pageerror", (e) => console.error("[pageerror]", String(e)));
+
+    await page.goto(`${origin}/index.html`, { waitUntil: "load" });
+    await page.setInputFiles("#file-input", [`${FIXTURE_DIR}${invoiceFixture.file}`, `${FIXTURE_DIR}${tableFixture.file}`]);
+    await waitForRunEnabled(page, { timeoutMs: 10000 });
+    await page.tap("#run");
+    await waitForStatus(page, (s) => s === "Done.", { timeoutMs: 30000, label: "the run to finish" });
+
+    const fileStatuses = await page.$$eval("#file-list .file-status", (els) => els.map((e) => e.textContent));
+    await page.tap("#copy");
+    const copyButtonText = await waitForText(page, "#copy", (t) => t === "Copied!", { timeoutMs: 5000, label: "the Copy button to update after tap" });
+    const [download] = await Promise.all([page.waitForEvent("download"), page.tap("#download")]);
+    const zipBytes = new Uint8Array(readFileSync(await download.path()));
+    const names = Object.keys(unzipSync(zipBytes)).sort();
+
+    const bothDone = fileStatuses.length === 2 && fileStatuses.every((s) => s === "Done");
+    const copiedOk = copyButtonText === "Copied!";
+    const zipOk = JSON.stringify(names) === JSON.stringify(["sample-invoice.docx", "table.docx"]);
+    console.log(`Per-file statuses: ${JSON.stringify(fileStatuses)}`);
+    console.log(`Copy button after tap: ${JSON.stringify(copyButtonText)}`);
+    console.log(`Zip entries: ${JSON.stringify(names)}`);
+
+    if (!bothDone || !copiedOk || !zipOk) {
+      console.error("✗ FAILED: a touch-driven multi-file batch (tap Run, tap Copy, tap Download) didn't complete correctly.");
+      failed = true;
+    } else {
+      console.log("✓ Multi-file batch, Copy, and zip Download all work correctly under touch input.");
+    }
+    await context.close();
+  }
+
+  {
+    console.log(`\n=== mobile touch: large-batch confirm() dialog, tap Run (iPhone 13) ===`);
+    const invoiceFixture = manifest.find((f) => f.name === "sample-invoice");
+    const manyPaths = Array.from({ length: 26 }, () => `${FIXTURE_DIR}${invoiceFixture.file}`);
+    const context = await browser.newContext(mobileContextOptions(devices["iPhone 13"]));
+    const page = await context.newPage();
+    page.on("pageerror", (e) => console.error("[pageerror]", String(e)));
+    let dialogMessage = null;
+    page.on("dialog", async (dialog) => { dialogMessage = dialog.message(); await dialog.accept(); });
+
+    await page.goto(`${origin}/index.html`, { waitUntil: "load" });
+    await page.setInputFiles("#file-input", manyPaths);
+    await waitForRunEnabled(page, { timeoutMs: 10000 });
+    await page.tap("#run");
+    await waitForStatus(page, (s) => s === "Done.", { timeoutMs: 60000, label: "the run to finish" });
+
+    const fileStatuses = await page.$$eval("#file-list .file-status", (els) => els.map((e) => e.textContent));
+    const dialogMentionsCount = dialogMessage?.includes("26") ?? false;
+    console.log(`Dialog fired: ${!!dialogMessage} (mentions 26: ${dialogMentionsCount})`);
+    console.log(`26/26 statuses "Done": ${fileStatuses.length === 26 && fileStatuses.every((s) => s === "Done")}`);
+
+    const ok = !!dialogMessage && dialogMentionsCount && fileStatuses.length === 26 && fileStatuses.every((s) => s === "Done");
+    if (!ok) {
+      console.error("✗ FAILED: tapping Run above the large-batch threshold on a mobile viewport didn't behave correctly.");
+      failed = true;
+    } else {
+      console.log("✓ The large-batch confirm() dialog fires and completes correctly from a touch tap on a mobile viewport.");
+    }
+    await context.close();
+  }
+
+  {
+    console.log(`\n=== mobile touch: per-file error, tap Run + tap Download (Galaxy S9+) ===`);
+    const invoiceFixture = manifest.find((f) => f.name === "sample-invoice");
+    const context = await browser.newContext(mobileContextOptions(devices["Galaxy S9+"]));
+    const page = await context.newPage();
+    page.on("pageerror", (e) => console.error("[pageerror]", String(e)));
+
+    await page.goto(`${origin}/index.html`, { waitUntil: "load" });
+    await page.setInputFiles("#file-input", [`${FIXTURE_DIR}${invoiceFixture.file}`, `${FIXTURE_DIR}corrupt-image.png`]);
+    await waitForRunEnabled(page, { timeoutMs: 10000 });
+    await page.tap("#run");
+    await waitForStatus(page, (s) => s === "Done.", { timeoutMs: 30000, label: "the run to finish" });
+
+    const fileStatuses = await page.$$eval("#file-list .file-status", (els) => els.map((e) => e.textContent));
+    const [download] = await Promise.all([page.waitForEvent("download"), page.tap("#download")]);
+    const zipBytes = new Uint8Array(readFileSync(await download.path()));
+    const entries = unzipSync(zipBytes);
+    const errorDocxText = entries["corrupt-image.docx"] ? readDocxText(entries["corrupt-image.docx"]) : null;
+
+    console.log(`Per-file statuses: ${JSON.stringify(fileStatuses)}`);
+    console.log(`corrupt-image.docx text: ${JSON.stringify(errorDocxText)}`);
+
+    const ok = fileStatuses.length === 2 && fileStatuses[0] === "Done" && fileStatuses[1].startsWith("Error:")
+      && errorDocxText?.includes("Error recognizing this page");
+    if (!ok) {
+      console.error("✗ FAILED: a per-file error didn't surface correctly through a touch-driven run and download.");
+      failed = true;
+    } else {
+      console.log("✓ A per-file error (bad image alongside a good one) surfaces correctly through tap Run and tap Download.");
     }
     await context.close();
   }
