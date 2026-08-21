@@ -353,6 +353,16 @@ try {
     await page.click("#run");
     await waitForStatus(page, (s) => s === "Done.", { timeoutMs: 30000, label: "the run to finish" });
 
+    // page.waitForEvent() must be registered before the click that
+    // triggers the download, not after — the click happens synchronously
+    // inside the page.evaluate() below, so the real browser download can
+    // fire (and, under load, be fully processed by Playwright) before a
+    // waitForEvent() called only afterward ever attaches its listener.
+    // Found the hard way: this raced and timed out in CI (30s) while
+    // passing reliably in a lighter-loaded local run — the same class of
+    // "listener registered too late" bug as every other download check in
+    // this file already avoids via Promise.all([waitForEvent, click]).
+    const downloadPromise = page.waitForEvent("download");
     const realDownloadName = await page.evaluate(() => new Promise((resolve) => {
       const originalCreateElement = document.createElement.bind(document);
       document.createElement = (tag) => {
@@ -365,7 +375,7 @@ try {
       };
       document.getElementById("download").click();
     }));
-    await page.waitForEvent("download");
+    await downloadPromise;
 
     console.log(`File-list name: ${JSON.stringify(listedName)}, real <a download> value: ${JSON.stringify(realDownloadName)}`);
     const ok = listedName === unicodeName && realDownloadName === "café ☕ résumé.docx";
