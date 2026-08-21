@@ -46,11 +46,15 @@ const PUBLIC_DIR = `${ROOT}public`;
 const PORT = 8935;
 
 // A single attempt taking longer than this is declared "broken" on its
-// own terms even without a crash: this app has no progress bar beyond the
-// per-page status list and no pause/cancel once a run starts (see
-// docs/PERFORMANCE.md) — a rendering phase this long, on a page the user
-// can't interact with, is not a usable product experience regardless of
-// whether the browser technically survives it.
+// own terms even without a crash: at the time this measurement was taken,
+// the app had no progress bar beyond the per-page status list and no way
+// to cancel a render in progress (see docs/PERFORMANCE.md) — a rendering
+// phase this long, on a page the user couldn't interact with, wasn't a
+// usable product experience regardless of whether the browser technically
+// survived it. A real Cancel button exists now (public/app.js), but the
+// measured numbers this ceiling produced are still the real evidence
+// MAX_PDF_PAGES is based on — kept as-is, not re-measured, since Cancel
+// changes what happens when a render runs long, not how fast it runs.
 const PRACTICAL_TIMEOUT_MS = 3 * 60 * 1000;
 
 if (!existsSync(`${PUBLIC_DIR}/vendor/tesseract.min.js`)) {

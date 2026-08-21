@@ -920,6 +920,244 @@ try {
     await context.close();
   }
 
+  // --- Cancel: recognize-phase, partway through a batch. Uses a tight
+  // 5000ms timeout (not this file's usual 30-60s) waiting for the
+  // "Cancelled" status specifically so a regression to the naive "just
+  // await worker.terminate()" approach — which hangs forever, since
+  // terminate() doesn't reject an in-flight recognize() call, confirmed
+  // directly from tesseract.js's own source — fails fast with an
+  // unambiguous message instead of a generic multi-second timeout. The
+  // bound is generous relative to how fast this actually resolves (the
+  // Promise.race settles as soon as cancelRequested flips), not tuned to
+  // one engine — this project already hit a real Firefox-specific timing
+  // surprise once (see waitForStatus's own history) and isn't repeating it. ---
+  {
+    console.log(`\n=== cancel: recognize-phase, partway through a 6-item batch ===`);
+    const invoiceFixture = manifest.find((f) => f.name === "sample-invoice");
+    const manyPaths = Array.from({ length: 6 }, () => `${FIXTURE_DIR}${invoiceFixture.file}`);
+    const context = await browser.newContext();
+    const page = await context.newPage();
+    page.on("pageerror", (e) => console.error("[pageerror]", String(e)));
+
+    await page.goto(`${origin}/index.html`, { waitUntil: "load" });
+    await page.setInputFiles("#file-input", manyPaths);
+    await waitForRunEnabled(page, { timeoutMs: 10000 });
+    await page.click("#run");
+    await waitForStatus(page, (s) => s.includes("3 of 6"), { timeoutMs: 15000, label: "item 3 to start" });
+    await page.click("#cancel");
+    const status = await waitForStatus(page, (s) => s.startsWith("Cancelled"), { timeoutMs: 5000, label: "the cancelled status (tight bound — a hang here means cancellation regressed)" });
+
+    const fileStatuses = await page.$$eval("#file-list .file-status", (els) => els.map((e) => e.textContent));
+    const runReenabled = await waitForRunEnabled(page, { timeoutMs: 2000 }).then(() => true).catch(() => false);
+    const fileInputReenabled = await page.$eval("#file-input", (el) => !el.disabled);
+    const cancelHidden = await page.$eval("#cancel", (el) => el.hidden);
+    console.log(`Status: ${JSON.stringify(status)}`);
+    console.log(`File statuses: ${JSON.stringify(fileStatuses)}`);
+    console.log(`Run/file-input re-enabled: ${runReenabled}/${fileInputReenabled}, Cancel hidden again: ${cancelHidden}`);
+
+    const [download] = await Promise.all([page.waitForEvent("download"), page.click("#download")]);
+    const zipBytes = new Uint8Array(readFileSync(await download.path()));
+    const entries = unzipSync(zipBytes);
+    const doneCount = fileStatuses.filter((s) => s === "Done").length;
+    const cancelledCount = fileStatuses.filter((s) => s === "Cancelled").length;
+    const completedEntry = Object.keys(entries).find((n) => readDocxText(entries[n]).includes(invoiceFixture.expectedText));
+    const cancelledEntry = Object.keys(entries).find((n) => readDocxText(entries[n]).includes("[Cancelled — not recognized]"));
+
+    const ok = status.includes(`${doneCount} of 6`) && doneCount > 0 && doneCount < 6
+      && doneCount + cancelledCount === 6 && runReenabled && fileInputReenabled && cancelHidden
+      && !!completedEntry && !!cancelledEntry;
+    if (!ok) {
+      console.error("✗ FAILED: recognize-phase cancel didn't stop partway through with correct state and output.");
+      failed = true;
+    } else {
+      console.log(`✓ Cancelled cleanly after ${doneCount}/6 items; UI re-enabled promptly; .docx has real text for completed items and a real placeholder for cancelled ones.`);
+    }
+    await context.close();
+  }
+
+  // --- Cancel: recognize-phase, before anything completes. Real
+  // regression test for a genuine [].every() vacuous-truth bug found
+  // during implementation: results.every(r => r.error) on an EMPTY array
+  // is true in JS, which would show "Error: all 0 file(s) failed to
+  // recognize" instead of a real cancelled status if the cancelled-check
+  // didn't take priority. ---
+  {
+    console.log(`\n=== cancel: recognize-phase, before any item completes ===`);
+    const invoiceFixture = manifest.find((f) => f.name === "sample-invoice");
+    const manyPaths = Array.from({ length: 3 }, () => `${FIXTURE_DIR}${invoiceFixture.file}`);
+    const context = await browser.newContext();
+    const page = await context.newPage();
+    page.on("pageerror", (e) => console.error("[pageerror]", String(e)));
+
+    await page.goto(`${origin}/index.html`, { waitUntil: "load" });
+    await page.setInputFiles("#file-input", manyPaths);
+    await waitForRunEnabled(page, { timeoutMs: 10000 });
+    await page.click("#run");
+    await waitForStatus(page, (s) => s.startsWith("Recognizing"), { timeoutMs: 15000, label: "recognition to start" });
+    await page.click("#cancel");
+    const status = await waitForStatus(page, (s) => s.startsWith("Cancelled"), { timeoutMs: 5000, label: "the cancelled status" });
+
+    console.log(`Status: ${JSON.stringify(status)}`);
+    const ok = status === "Cancelled — 0 of 3 recognized." && !status.startsWith("Error:");
+    if (!ok) {
+      console.error(`✗ FAILED: cancelling before any item completed produced the wrong status (possible [].every() vacuous-truth regression): ${JSON.stringify(status)}`);
+      failed = true;
+    } else {
+      console.log("✓ Cancelling with zero completed items reports a real cancelled status, not the vacuous-truth error string.");
+    }
+    await context.close();
+  }
+
+  // --- Cancel button visibility: hidden at rest, and again after a normal
+  // (non-cancelled) run completes — regression against it getting stuck
+  // visible once a run finishes on its own. ---
+  {
+    console.log(`\n=== cancel: button hidden at rest and after normal completion ===`);
+    const invoiceFixture = manifest.find((f) => f.name === "sample-invoice");
+    const context = await browser.newContext();
+    const page = await context.newPage();
+    page.on("pageerror", (e) => console.error("[pageerror]", String(e)));
+
+    await page.goto(`${origin}/index.html`, { waitUntil: "load" });
+    const hiddenAtRest = await page.$eval("#cancel", (el) => el.hidden);
+    await page.setInputFiles("#file-input", `${FIXTURE_DIR}${invoiceFixture.file}`);
+    await waitForRunEnabled(page, { timeoutMs: 10000 });
+    await page.click("#run");
+    await waitForStatus(page, (s) => s === "Done.", { timeoutMs: 30000, label: "the run to finish" });
+    const hiddenAfterDone = await page.$eval("#cancel", (el) => el.hidden);
+
+    console.log(`Hidden at rest: ${hiddenAtRest}, hidden after normal "Done.": ${hiddenAfterDone}`);
+    if (!hiddenAtRest || !hiddenAfterDone) {
+      console.error("✗ FAILED: the Cancel button was visible when it shouldn't be.");
+      failed = true;
+    } else {
+      console.log("✓ Cancel button stays hidden at rest and after a run completes normally.");
+    }
+    await context.close();
+  }
+
+  // --- Cancel: double-click safety, mirroring the existing synchronous
+  // double-click-Run race test — two real clicks in one script turn, not
+  // two separate Playwright actions seconds apart (which wouldn't be a
+  // race at all — see that test's own comment on this exact methodology
+  // trap). ---
+  {
+    console.log(`\n=== cancel: synchronous double-click doesn't corrupt state ===`);
+    const invoiceFixture = manifest.find((f) => f.name === "sample-invoice");
+    const manyPaths = Array.from({ length: 4 }, () => `${FIXTURE_DIR}${invoiceFixture.file}`);
+    const context = await browser.newContext();
+    const page = await context.newPage();
+    const pageErrors = [];
+    page.on("pageerror", (e) => pageErrors.push(String(e)));
+
+    await page.goto(`${origin}/index.html`, { waitUntil: "load" });
+    await page.setInputFiles("#file-input", manyPaths);
+    await waitForRunEnabled(page, { timeoutMs: 10000 });
+    await page.click("#run");
+    await waitForStatus(page, (s) => s.startsWith("Recognizing"), { timeoutMs: 15000, label: "recognition to start" });
+    await page.evaluate(() => {
+      const btn = document.getElementById('cancel');
+      btn.click();
+      btn.click();
+    });
+    const status = await waitForStatus(page, (s) => s.startsWith("Cancelled"), { timeoutMs: 5000, label: "the cancelled status" });
+
+    console.log(`Status: ${JSON.stringify(status)}, page errors: ${JSON.stringify(pageErrors)}`);
+    const ok = status.startsWith("Cancelled") && pageErrors.length === 0;
+    if (!ok) {
+      console.error("✗ FAILED: a synchronous double-click on Cancel produced an error or a corrupted status.");
+      failed = true;
+    } else {
+      console.log("✓ A synchronous double-click on Cancel produces one clean cancellation, no errors.");
+    }
+    await context.close();
+  }
+
+  // --- Cancel: race against natural completion on a single-item run.
+  // Clicking Cancel right after Run on a fast, one-item batch can
+  // legitimately land either before or after that one item finishes —
+  // both "Done." and "Cancelled — 0 of 1 recognized." are correct
+  // outcomes; the vacuous-truth error string and a hang are the only two
+  // wrong ones. ---
+  {
+    console.log(`\n=== cancel: race against natural completion (1-item run) ===`);
+    const invoiceFixture = manifest.find((f) => f.name === "sample-invoice");
+    const context = await browser.newContext();
+    const page = await context.newPage();
+    const pageErrors = [];
+    page.on("pageerror", (e) => pageErrors.push(String(e)));
+
+    await page.goto(`${origin}/index.html`, { waitUntil: "load" });
+    await page.setInputFiles("#file-input", `${FIXTURE_DIR}${invoiceFixture.file}`);
+    await waitForRunEnabled(page, { timeoutMs: 10000 });
+    await page.click("#run");
+    await page.click("#cancel").catch(() => {}); // may already be hidden if the run finished first — that's a legitimate outcome, not a failure
+    const status = await waitForStatus(
+      page,
+      (s) => s === "Done." || s.startsWith("Cancelled") || s.startsWith("Error:"),
+      { timeoutMs: 10000, label: "a terminal status" },
+    );
+
+    console.log(`Status: ${JSON.stringify(status)}, page errors: ${JSON.stringify(pageErrors)}`);
+    const ok = (status === "Done." || status.startsWith("Cancelled")) && pageErrors.length === 0;
+    if (!ok) {
+      console.error(`✗ FAILED: racing Cancel against natural completion produced an illegitimate outcome: ${JSON.stringify(status)}`);
+      failed = true;
+    } else {
+      console.log(`✓ Racing Cancel against natural completion always lands on a legitimate outcome ("${status}"), never hangs or shows the vacuous-truth error.`);
+    }
+    await context.close();
+  }
+
+  // --- Cancel: render-phase (PDF page rasterization), not just the
+  // recognize phase. Before this, a cancelled render fell through to the
+  // same blank-string success path a fully-successful render uses — this
+  // regression-tests the dedicated cancelled-render status added
+  // alongside it. Uses a real PDF sized to give a genuinely measurable
+  // render window (large per-page canvas — see measure-render-scaling.mjs
+  // for why full-resolution-scan-shaped pages are the realistic stress
+  // case), built with pdf-lib the same way the MAX_PDF_PAGES boundary
+  // tests above do. ---
+  {
+    console.log(`\n=== cancel: render-phase (PDF rasterization) ===`);
+    const pageCount = 40;
+    const pdfDoc = await PDFDocument.create();
+    const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
+    for (let i = 0; i < pageCount; i++) {
+      const p = pdfDoc.addPage([2480, 3508]); // full-resolution-scan-shaped page — real render cost per page, not free vector text
+      p.drawText(`Page ${i + 1}`, { x: 100, y: 100, size: 40, font, color: rgb(0, 0, 0) });
+    }
+    const pdfB64 = Buffer.from(await pdfDoc.save()).toString("base64");
+
+    const context = await browser.newContext();
+    const page = await context.newPage();
+    page.on("pageerror", (e) => console.error("[pageerror]", String(e)));
+
+    await page.goto(`${origin}/index.html`, { waitUntil: "load" });
+    await selectFilesInBrowser(page, [{ name: "cancel-render-test.pdf", b64: pdfB64, type: "application/pdf" }]);
+    await waitForText(page, "#cancel", (t) => t === "Cancel", { timeoutMs: 5000, label: "the Cancel button to appear" });
+    await page.waitForTimeout(800); // let a handful of pages render first
+    await page.click("#cancel");
+    const status = await waitForStatus(page, (s) => s.startsWith("Cancelled"), { timeoutMs: 5000, label: "the render-cancelled status" });
+
+    const renderedCount = await page.$$eval("#file-list .file-name", (els) => els.length);
+    const fileInputReenabled = await page.$eval("#file-input", (el) => !el.disabled);
+    const cancelHidden = await page.$eval("#cancel", (el) => el.hidden);
+    console.log(`Status: ${JSON.stringify(status)}`);
+    console.log(`Rendered page count: ${renderedCount} (expected < ${pageCount})`);
+    console.log(`file-input re-enabled: ${fileInputReenabled}, Cancel hidden again: ${cancelHidden}`);
+
+    const ok = status.includes("Cancelled") && renderedCount > 0 && renderedCount < pageCount
+      && fileInputReenabled && cancelHidden;
+    if (!ok) {
+      console.error("✗ FAILED: cancelling a PDF render didn't stop early with correct state.");
+      failed = true;
+    } else {
+      console.log(`✓ Render cancelled cleanly after ${renderedCount}/${pageCount} pages, with a real distinct status (not the old blank-string gap).`);
+    }
+    await context.close();
+  }
+
   // --- Mobile viewport & touch emulation: this project has zero
   // responsive media queries (public/style.css relies entirely on fluid
   // sizing — clamp(), max-width, percentage padding) and had never
@@ -1132,6 +1370,34 @@ try {
     await context.close();
   }
 
+  {
+    console.log(`\n=== mobile touch: tap Cancel mid-run (iPhone 13) ===`);
+    const invoiceFixture = manifest.find((f) => f.name === "sample-invoice");
+    const manyPaths = Array.from({ length: 4 }, () => `${FIXTURE_DIR}${invoiceFixture.file}`);
+    const context = await browser.newContext(mobileContextOptions(devices["iPhone 13"]));
+    const page = await context.newPage();
+    page.on("pageerror", (e) => console.error("[pageerror]", String(e)));
+
+    await page.goto(`${origin}/index.html`, { waitUntil: "load" });
+    await page.setInputFiles("#file-input", manyPaths);
+    await waitForRunEnabled(page, { timeoutMs: 10000 });
+    await page.tap("#run");
+    await waitForStatus(page, (s) => s.startsWith("Recognizing"), { timeoutMs: 15000, label: "recognition to start" });
+    await page.tap("#cancel");
+    const status = await waitForStatus(page, (s) => s.startsWith("Cancelled"), { timeoutMs: 5000, label: "the cancelled status" });
+    const cancelHidden = await page.$eval("#cancel", (el) => el.hidden);
+
+    console.log(`Status: ${JSON.stringify(status)}, Cancel hidden again: ${cancelHidden}`);
+    const ok = status.startsWith("Cancelled") && cancelHidden;
+    if (!ok) {
+      console.error("✗ FAILED: tapping Cancel mid-run on a mobile viewport didn't stop the run correctly.");
+      failed = true;
+    } else {
+      console.log("✓ Tapping Cancel mid-run works correctly on a real mobile viewport with touch input.");
+    }
+    await context.close();
+  }
+
   // --- Accessibility: a real automated audit (axe-core, via
   // @axe-core/playwright — the standard tool for this, not a hand-rolled
   // check), against the real running page in three real states, not just
@@ -1166,6 +1432,10 @@ try {
     await auditState("file selected (file-list populated)");
 
     await page.click("#run");
+    // A brand-new interactive element (#cancel) is only ever visible in
+    // this exact state — it would otherwise ship completely unaudited.
+    await waitForStatus(page, (s) => s.startsWith("Recognizing"), { timeoutMs: 20000, label: "recognition to start" });
+    await auditState("run in progress (cancel button visible)");
     await waitForStatus(page, (s) => s === "Done.", { timeoutMs: 30000, label: "the run to finish" });
     await auditState("run complete (result panel visible)");
 
@@ -1173,7 +1443,7 @@ try {
       console.error(`✗ FAILED: ${allViolations.length} accessibility violation(s) found across ${new Set(allViolations.map((v) => v.state)).size} state(s) — see details above.`);
       failed = true;
     } else {
-      console.log("✓ No accessibility violations found in any of the three states audited.");
+      console.log("✓ No accessibility violations found in any of the four states audited.");
     }
     await context.close();
   }
