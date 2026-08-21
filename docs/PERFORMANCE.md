@@ -133,25 +133,27 @@ worker → download the resulting `.docx` and check every single page's content 
 not just that the run completed. Separate from `npm run verify` because it's genuinely slow
 by design; run it by hand with `npm run build && npm run verify-large-pdf`.
 
-Real measured run (2026-08-21, headless Chromium):
+Real measured run (2026-08-21, headless Chromium, on `main` after the Cancel PR merged):
 
 | Phase                          | Time     |
 | ------------------------------- | --------: |
 | Render (60 pages)               | 1.2 s     |
-| Engine load                     | 1.1 s     |
-| Recognize (60 pages)            | 54.1 s (~902 ms/page) |
-| **Total**                       | **56.4 s** |
+| Engine load                     | 0.6 s     |
+| Recognize (60 pages)            | 56.2 s (~937 ms/page) |
+| **Total**                       | **57.9 s** |
 
 - **Every one of the 60 pages** came back at or above 96.2% word accuracy (worst: page 34),
   in the correct order, correctly paired with its own page break in the `.docx` — the
   render→OCR→export pipeline holds up at this scale, not just at 2-3 pages.
-- **JS heap grew from 3.3 MB to 6.4 MB** across the full run (measured via the CDP
+- **JS heap grew from 3.3 MB to 6.5 MB** across the full run (measured via the CDP
   `Performance.getMetrics` `JSHeapUsedSize` counter) — modest growth, no runaway leak, for
   a run that creates 60 canvases/blobs and one long-lived Tesseract worker.
-- **The real run (56s) is well under half the confirmation dialog's own conservative
+- **The real run (58s) is well under half the confirmation dialog's own conservative
   estimate (~102s for 60 items)** — the estimate is intentionally pessimistic (see above),
-  and this is the first real data point confirming it errs in the safe direction rather
-  than underselling how long a large run actually takes.
+  and this data point (re-run post-Cancel, within normal run-to-run variance of the
+  pre-Cancel 56.4s figure) confirms it errs in the safe direction rather than underselling
+  how long a large run actually takes. It also confirms the per-page `isCancelled?.()` check
+  added for render-phase Cancel costs nothing measurable at this scale.
 - The main-thread rendering loop referenced above did **not** visibly stall or drop input
   during this run at 60 pages; the "How far rendering scales" section below extends this all
   the way to 500-600 pages, where the same holds — no stall, no crash, just time.
