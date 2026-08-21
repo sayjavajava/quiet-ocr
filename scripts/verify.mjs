@@ -20,7 +20,7 @@
  * Chromium Playwright can launch (set PLAYWRIGHT_CHROMIUM_PATH to a local
  * install if the default download isn't available).
  */
-import { chromium } from "playwright";
+import { chromium, firefox, webkit } from "playwright";
 import { readFileSync, existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { unzipSync, strFromU8 } from "fflate";
@@ -70,9 +70,28 @@ const manifest = JSON.parse(readFileSync(`${FIXTURE_DIR}manifest.json`, "utf8"))
 const server = await startServer(PUBLIC_DIR, PORT);
 const origin = `http://127.0.0.1:${PORT}`;
 
+// BROWSER selects the real engine to run this whole suite against — the
+// same fixtures, the same UI, the same network-cleanliness check, just a
+// different rendering/JS engine underneath. Defaults to chromium (this
+// project's only committed, self-hosted engine locally); CI additionally
+// runs this against firefox and webkit in a matrix, which is the only way
+// a real engine-compatibility gap (like the Map.prototype.getOrInsertComputed
+// shim pdf-to-images.js needed for pdf.js) would actually show up — see
+// docs/PERFORMANCE.md's "PDF input" section for that history.
+const ENGINES = { chromium, firefox, webkit };
+const engineName = process.env.BROWSER ?? "chromium";
+const engine = ENGINES[engineName];
+if (!engine) {
+  console.error(`✗ Unknown BROWSER "${engineName}" — expected one of: ${Object.keys(ENGINES).join(", ")}.`);
+  process.exit(1);
+}
+
 const launchOptions = {};
-if (process.env.PLAYWRIGHT_CHROMIUM_PATH) launchOptions.executablePath = process.env.PLAYWRIGHT_CHROMIUM_PATH;
-const browser = await chromium.launch(launchOptions);
+if (engineName === "chromium" && process.env.PLAYWRIGHT_CHROMIUM_PATH) {
+  launchOptions.executablePath = process.env.PLAYWRIGHT_CHROMIUM_PATH;
+}
+console.log(`Running against: ${engineName}`);
+const browser = await engine.launch(launchOptions);
 
 let failed = false;
 const allRequests = [];
