@@ -61,3 +61,40 @@ export async function selectFilesInBrowser(page, entries) {
     input.dispatchEvent(new Event("change", { bubbles: true }));
   }, entries);
 }
+
+/**
+ * Polls #status by hand (fixed interval, explicit deadline) instead of
+ * page.waitForFunction. Found necessary the hard way: a Firefox CI run of
+ * the 26-item large-batch test threw "Timeout 30000ms exceeded" from a
+ * waitForFunction call whose own options literally said `{ timeout: 60000
+ * }` — a real, reproducible mismatch between the configured timeout and
+ * the one Playwright reported, on this Playwright version, only surfaced
+ * under Firefox. Rather than chase that mismatch further, this sidesteps
+ * it entirely: the deadline is a plain Date.now() comparison this code
+ * controls directly, and a timeout here reports the last-seen status
+ * text, which plain waitForFunction's TimeoutError does not.
+ */
+export async function waitForStatus(page, predicate, { timeoutMs, intervalMs = 300, label = "status" } = {}) {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const status = await page.textContent("#status");
+    if (predicate(status)) return status;
+    if (Date.now() > deadline) {
+      throw new Error(`Timed out after ${timeoutMs}ms waiting for ${label}. Last status: ${JSON.stringify(status)}`);
+    }
+    await page.waitForTimeout(intervalMs);
+  }
+}
+
+/** Same reasoning as waitForStatus, for the #run button's disabled state. */
+export async function waitForRunEnabled(page, { timeoutMs = 30000, intervalMs = 200 } = {}) {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const disabled = await page.$eval("#run", (el) => el.disabled);
+    if (!disabled) return;
+    if (Date.now() > deadline) {
+      throw new Error(`Timed out after ${timeoutMs}ms waiting for #run to become enabled.`);
+    }
+    await page.waitForTimeout(intervalMs);
+  }
+}

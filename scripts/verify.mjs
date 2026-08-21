@@ -26,7 +26,7 @@ import { fileURLToPath } from "node:url";
 import { unzipSync, strFromU8 } from "fflate";
 import { startServer } from "./serve.mjs";
 import { wordAccuracy, parseLabelledBlocks } from "./text-accuracy.mjs";
-import { readDocxText, readDocxPages, selectFilesInBrowser } from "./browser-test-helpers.mjs";
+import { readDocxText, readDocxPages, selectFilesInBrowser, waitForStatus, waitForRunEnabled } from "./browser-test-helpers.mjs";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const PUBLIC_DIR = `${ROOT}public`;
@@ -119,13 +119,11 @@ try {
     // that's not immediate: the change handler renders every page (see
     // pdf-to-images.js) before Run is enabled at all.
     await page.click("#run");
-    await page.waitForFunction(
-      () => document.getElementById("status").textContent === "Done." ||
-        /^Error:/.test(document.getElementById("status").textContent),
-      { timeout: 60000 },
-    );
+    const status = await waitForStatus(page, (s) => s === "Done." || /^Error:/.test(s), {
+      timeoutMs: 60000,
+      label: "the run to finish",
+    });
 
-    const status = await page.textContent("#status");
     if (status.startsWith("Error:")) {
       console.error(`✗ FAILED: page reported ${status}`);
       failed = true;
@@ -201,13 +199,11 @@ try {
     await page.goto(`${origin}/index.html`, { waitUntil: "load" });
     await page.setInputFiles("#file-input", batchPaths);
     await page.click("#run");
-    await page.waitForFunction(
-      () => document.getElementById("status").textContent === "Done." ||
-        /^Error:/.test(document.getElementById("status").textContent),
-      { timeout: 90000 },
-    );
+    const status = await waitForStatus(page, (s) => s === "Done." || /^Error:/.test(s), {
+      timeoutMs: 90000,
+      label: "the run to finish",
+    });
 
-    const status = await page.textContent("#status");
     const recognized = await page.inputValue("#result");
     const fileStatuses = await page.$$eval("#file-list .file-status", (els) => els.map((e) => e.textContent));
     console.log(`Status: ${status}`);
@@ -248,7 +244,7 @@ try {
 
     await page.goto(`${origin}/index.html`, { waitUntil: "load" });
     await page.setInputFiles("#file-input", manyPaths);
-    await page.waitForFunction(() => !document.getElementById("run").disabled);
+    await waitForRunEnabled(page);
 
     let dialogMessage = null;
     page.once("dialog", async (dialog) => {
@@ -293,9 +289,9 @@ try {
 
     await page.goto(`${origin}/index.html`, { waitUntil: "load" });
     await page.setInputFiles("#file-input", manyPaths);
-    await page.waitForFunction(() => !document.getElementById("run").disabled);
+    await waitForRunEnabled(page);
     await page.click("#run");
-    await page.waitForFunction(() => document.getElementById("status").textContent === "Done.", { timeout: 60000 });
+    await waitForStatus(page, (s) => s === "Done.", { timeoutMs: 60000, label: "the run to finish" });
 
     const fileStatuses = await page.$$eval("#file-list .file-status", (els) => els.map((e) => e.textContent));
     const [download] = await Promise.all([page.waitForEvent("download"), page.click("#download")]);
@@ -342,10 +338,10 @@ try {
     page.on("pageerror", (e) => console.error("[pageerror]", String(e)));
     await page.goto(`${origin}/index.html`, { waitUntil: "load" });
     await selectFilesInBrowser(page, [{ name: unicodeName, b64: invoiceB64, type: "image/png" }]);
-    await page.waitForFunction(() => !document.getElementById("run").disabled, { timeout: 10000 });
+    await waitForRunEnabled(page, { timeoutMs: 10000 });
     const listedName = await page.textContent("#file-list .file-name");
     await page.click("#run");
-    await page.waitForFunction(() => document.getElementById("status").textContent === "Done.", { timeout: 30000 });
+    await waitForStatus(page, (s) => s === "Done.", { timeoutMs: 30000, label: "the run to finish" });
 
     const realDownloadName = await page.evaluate(() => new Promise((resolve) => {
       const originalCreateElement = document.createElement.bind(document);
@@ -388,9 +384,9 @@ try {
       { name: unicodeName, b64: invoiceB64, type: "image/png" },
       { name: tableFixture.file, b64: tableB64, type: "image/png" },
     ]);
-    await page.waitForFunction(() => !document.getElementById("run").disabled, { timeout: 10000 });
+    await waitForRunEnabled(page, { timeoutMs: 10000 });
     await page.click("#run");
-    await page.waitForFunction(() => document.getElementById("status").textContent === "Done.", { timeout: 30000 });
+    await waitForStatus(page, (s) => s === "Done.", { timeoutMs: 30000, label: "the run to finish" });
 
     const [download] = await Promise.all([page.waitForEvent("download"), page.click("#download")]);
     const zipBytes = new Uint8Array(readFileSync(await download.path()));
@@ -425,7 +421,7 @@ try {
     await page.goto(`${origin}/index.html`, { waitUntil: "load" });
     await page.setInputFiles("#file-input", `${FIXTURE_DIR}${invoiceFixture.file}`);
     await page.click("#run");
-    await page.waitForFunction(() => document.getElementById("status").textContent === "Done.", { timeout: 60000 });
+    await waitForStatus(page, (s) => s === "Done.", { timeoutMs: 60000, label: "the run to finish" });
 
     const label = await page.textContent("#download");
     const [download] = await Promise.all([page.waitForEvent("download"), page.click("#download")]);
@@ -457,7 +453,7 @@ try {
     await page.goto(`${origin}/index.html`, { waitUntil: "load" });
     await page.setInputFiles("#file-input", [`${FIXTURE_DIR}${invoiceFixture.file}`, `${FIXTURE_DIR}${tableFixture.file}`]);
     await page.click("#run");
-    await page.waitForFunction(() => document.getElementById("status").textContent === "Done.", { timeout: 60000 });
+    await waitForStatus(page, (s) => s === "Done.", { timeoutMs: 60000, label: "the run to finish" });
 
     const label = await page.textContent("#download");
     const [download] = await Promise.all([page.waitForEvent("download"), page.click("#download")]);
@@ -489,9 +485,9 @@ try {
 
     await page.goto(`${origin}/index.html`, { waitUntil: "load" });
     await page.setInputFiles("#file-input", `${FIXTURE_DIR}${pdfFixture.file}`);
-    await page.waitForFunction(() => !document.getElementById("run").disabled, { timeout: 20000 });
+    await waitForRunEnabled(page, { timeoutMs: 20000 });
     await page.click("#run");
-    await page.waitForFunction(() => document.getElementById("status").textContent === "Done.", { timeout: 60000 });
+    await waitForStatus(page, (s) => s === "Done.", { timeoutMs: 60000, label: "the run to finish" });
 
     const label = await page.textContent("#download");
     const [download] = await Promise.all([page.waitForEvent("download"), page.click("#download")]);
@@ -530,9 +526,9 @@ try {
 
     await page.goto(`${origin}/index.html`, { waitUntil: "load" });
     await page.setInputFiles("#file-input", `${FIXTURE_DIR}${pdfFixture.file}`);
-    await page.waitForFunction(() => !document.getElementById("run").disabled, { timeout: 20000 });
+    await waitForRunEnabled(page, { timeoutMs: 20000 });
     await page.click("#run");
-    await page.waitForFunction(() => document.getElementById("status").textContent === "Done.", { timeout: 60000 });
+    await waitForStatus(page, (s) => s === "Done.", { timeoutMs: 60000, label: "the run to finish" });
 
     const [download] = await Promise.all([page.waitForEvent("download"), page.click("#download")]);
     const bytes = new Uint8Array(readFileSync(await download.path()));
@@ -578,7 +574,7 @@ try {
       `${FIXTURE_DIR}${tableFixture.file}`,
     ]);
     await page.click("#run");
-    await page.waitForFunction(() => document.getElementById("status").textContent === "Done.", { timeout: 30000 });
+    await waitForStatus(page, (s) => s === "Done.", { timeoutMs: 30000, label: "the run to finish" });
 
     const fileStatuses = await page.$$eval("#file-list .file-status", (els) => els.map((e) => e.textContent));
     const preview = await page.inputValue("#result");
@@ -636,14 +632,14 @@ try {
       };
     });
     await page.setInputFiles("#file-input", `${FIXTURE_DIR}${pdfFixture.file}`);
-    await page.waitForFunction(() => !document.getElementById("run").disabled, { timeout: 20000 });
+    await waitForRunEnabled(page, { timeoutMs: 20000 });
 
     const statusAfterRender = await page.textContent("#status");
     const namesAfterRender = await page.$$eval("#file-list .file-name", (els) => els.map((e) => e.textContent));
     const runLabel = await page.textContent("#run");
 
     await page.click("#run");
-    await page.waitForFunction(() => document.getElementById("status").textContent === "Done.", { timeout: 30000 });
+    await waitForStatus(page, (s) => s === "Done.", { timeoutMs: 30000, label: "the run to finish" });
     const preview = await page.inputValue("#result");
 
     console.log(`Status after render: ${JSON.stringify(statusAfterRender)}`);
@@ -680,13 +676,13 @@ try {
 
     await page.goto(`${origin}/index.html`, { waitUntil: "load" });
     await page.setInputFiles("#file-input", [`${FIXTURE_DIR}${invoiceFixture.file}`, `${FIXTURE_DIR}${pdfFixture.file}`]);
-    await page.waitForFunction(() => !document.getElementById("run").disabled, { timeout: 20000 });
+    await waitForRunEnabled(page, { timeoutMs: 20000 });
 
     const namesAfterRender = await page.$$eval("#file-list .file-name", (els) => els.map((e) => e.textContent));
     const runLabel = await page.textContent("#run");
 
     await page.click("#run");
-    await page.waitForFunction(() => document.getElementById("status").textContent === "Done.", { timeout: 30000 });
+    await waitForStatus(page, (s) => s === "Done.", { timeoutMs: 30000, label: "the run to finish" });
     const preview = await page.inputValue("#result");
 
     const label = await page.textContent("#download");
@@ -738,7 +734,7 @@ try {
       `${FIXTURE_DIR}${paragraphFixture.file}`,
     ]);
     await page.click("#run");
-    await page.waitForFunction(() => document.getElementById("status").textContent.startsWith("Recognizing"), { timeout: 20000 });
+    await waitForStatus(page, (s) => s.startsWith("Recognizing"), { timeoutMs: 20000, label: "recognition to start" });
     const disabledMidRun = await page.$eval("#file-input", (el) => el.disabled);
 
     // setInputFiles bypasses the native disabled-input block entirely (it
@@ -749,7 +745,7 @@ try {
     await page.waitForTimeout(200);
     const runStillDisabled = await page.$eval("#run", (el) => el.disabled);
 
-    await page.waitForFunction(() => document.getElementById("status").textContent === "Done.", { timeout: 30000 });
+    await waitForStatus(page, (s) => s === "Done.", { timeoutMs: 30000, label: "the run to finish" });
     const names = await page.$$eval("#file-list .file-name", (els) => els.map((e) => e.textContent));
     const result = await page.inputValue("#result");
 
@@ -794,7 +790,7 @@ try {
       btn.click();
       btn.click();
     });
-    await page.waitForFunction(() => document.getElementById("status").textContent === "Done.", { timeout: 30000 });
+    await waitForStatus(page, (s) => s === "Done.", { timeoutMs: 30000, label: "the run to finish" });
 
     console.log(`Tesseract.createWorker call count: ${createWorkerCalls}`);
     if (createWorkerCalls !== 1) {
@@ -816,9 +812,9 @@ try {
     await page.goto(`${origin}/index.html`, { waitUntil: "load" });
     await page.setInputFiles("#file-input", `${FIXTURE_DIR}${invoiceFixture.file}`);
     await page.click("#run");
-    await page.waitForFunction(() => document.getElementById("status").textContent.startsWith("Recognizing"), { timeout: 20000 });
+    await waitForStatus(page, (s) => s.startsWith("Recognizing"), { timeoutMs: 20000, label: "recognition to start" });
     const resultSectionHiddenMidRun = await page.$eval("#result-section", (el) => el.hidden);
-    await page.waitForFunction(() => document.getElementById("status").textContent === "Done.", { timeout: 30000 });
+    await waitForStatus(page, (s) => s === "Done.", { timeoutMs: 30000, label: "the run to finish" });
 
     if (!resultSectionHiddenMidRun) {
       console.error("✗ FAILED: the result/download section was visible during an active run.");
