@@ -46,10 +46,13 @@ canvases the accuracy fixtures use.
   monospace text) takes longer than `sample-invoice` despite being a similarly small image,
   because there's more text to recognize.
 - **A full-page scan takes real time** — 16–17 seconds for one A4 page at scanning
-  resolution. That's expected for a WebAssembly LSTM model running on the main thread of a
-  single tab — a multi-page document (via batch upload or PDF input, see below) is a
-  genuinely long-running operation with no pause/cancel yet (see the "Scope, for now"
-  section of the [README](../README.md)).
+  resolution. That's expected for a WebAssembly LSTM model — recognize() itself runs inside
+  the Tesseract Web Worker (`public/app.js`, `Tesseract.createWorker()`), not the page's main
+  thread, confirmed directly from `tesseract.js`'s own source, so a long run doesn't block
+  the tab's UI on its own. A multi-page document (via batch upload or PDF input, see below)
+  is still a genuinely long-running operation — a real Cancel button now exists for it (see
+  the "Scope, for now" section of the [README](../README.md)), rather than the "no pause or
+  cancel at all" gap this paragraph originally described.
 
 ## PDF input
 
@@ -150,8 +153,8 @@ Real measured run (2026-08-21, headless Chromium):
   and this is the first real data point confirming it errs in the safe direction rather
   than underselling how long a large run actually takes.
 - The main-thread rendering loop referenced above did **not** visibly stall or drop input
-  during this run at 60 pages; whether that holds at, say, 500+ pages remains unverified —
-  the synchronous main-thread design itself is unchanged.
+  during this run at 60 pages; the "How far rendering scales" section below extends this all
+  the way to 500-600 pages, where the same holds — no stall, no crash, just time.
 
 ## How far rendering scales, and where the hard cap comes from
 
@@ -178,10 +181,12 @@ Real measured results (2026-08-21, headless Chromium):
 essentially flat the entire time (e.g. the scan profile: ~0.6 MB → 4.6–5.4 MB regardless of
 whether it was rendering 5 pages or 600) — no leak, garbage collection keeps up, and render time
 per page converges to a steady state rather than degrading. The only thing that actually broke
-either profile was a deliberately-chosen 3-minute ceiling, not a technical wall: this app has no
-progress bar beyond the per-page status list and no pause/cancel once a run starts, so a
-synchronous wait longer than that isn't a usable experience regardless of whether the browser
-would technically survive it.
+either profile was a deliberately-chosen 3-minute ceiling, not a technical wall: at the time of
+this measurement the app had no progress bar beyond the per-page status list and no way to
+cancel a render in progress, so a synchronous wait longer than that wasn't a usable experience
+regardless of whether the browser would technically survive it. (A real Cancel button exists
+now — see below — but that doesn't change how fast rendering itself runs, so the measured
+numbers above stand as the real basis for the cap that follows.)
 
 **`MAX_PDF_PAGES = 300`** (`public/pdf-to-images.js`) is set from this data, not guessed — a PDF
 over that page count is now rejected outright, before the expensive per-page render loop starts
@@ -191,11 +196,33 @@ the user to split the file. 300 pages is:
   600 (where pure rendering alone already became impractical);
 - combined with real measured OCR cost for degraded/scanned content (~1.7 s/page, the DPI sweep
   above), a 300-page document's worst-case *total* time (render + OCR) is roughly 10 minutes —
-  already a lot for a no-cancel operation, which is exactly why the cap doesn't sit any higher
+  already substantial even with Cancel available, which is why the cap doesn't sit any higher
   even though rendering alone stayed healthy well past that point.
 
-This closes half of the previously-flagged gap. **Still open:** there's still no pause/cancel
-once a run is underway (a 300-page worst-case document is still a real ~10-minute wait with no
-way to stop it), and rendering still happens synchronously in the same main-thread loop that
-drives the UI — that architecture is unchanged, it just now has a real, evidenced ceiling on how
-far it's ever asked to go.
+## Cancel, and the actual state of the two previously-flagged gaps
+
+**"No pause/cancel once a run starts" is closed.** A real Cancel button (`public/app.js`)
+appears during both busy phases — PDF rendering and OCR recognition — and stops the run early
+rather than only being able to wait it out. Whatever finished before cancelling is still kept:
+completed items are recognized normally, and a clear `[Cancelled — not recognized]` placeholder
+takes the place of anything that didn't get to run, in both the on-screen preview and the
+downloaded `.docx`/`.zip`. Recognize-phase cancellation is near-instant (it races the in-flight
+`recognize()` call against the cancel signal — `worker.terminate()` alone doesn't work for this,
+confirmed directly from `tesseract.js`'s source: it never rejects an in-flight job, so a bare
+`await` on one would hang forever if terminated mid-call); render-phase cancellation takes effect
+within one page's render time (checked once per page, not mid-page — pdf.js does support true
+mid-page cancellation, but wiring it up isn't worth the added complexity for a window that's
+already sub-second at the shipped DPI).
+
+**"Rendering is still synchronous on the main thread" is not closed — it's downgraded from an
+open architectural gap to a bounded, tested limitation.** Page rasterization still runs on the
+main thread, per page, exactly as before; that didn't change and isn't planned to (a Worker +
+`OffscreenCanvas` rewrite of `pdf-to-images.js` would be real, risky surgery — `OffscreenCanvas`
+support is weakest on exactly the engine this project also tests against in CI, WebKit — to fix
+something the measurements above already show is bounded: the worst single blocking unit is
+sub-second, and it never runs away). What actually changed is the *practical consequence*:
+`scripts/verify.mjs`'s render-phase cancel test clicks the real Cancel button mid-render and
+confirms it takes effect within a tight bound rather than only at full-batch completion — real
+evidence the main thread stays responsive enough for genuine input during a render, not just an
+assumption. Recognize() itself was never on the main thread to begin with, either — see the
+correction above; it always ran inside the Tesseract Worker.

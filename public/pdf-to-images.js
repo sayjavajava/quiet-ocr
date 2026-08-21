@@ -64,8 +64,11 @@ export function isPdfFile(file) {
 // Hard cap on pages rendered from a single PDF — there was previously no
 // limit at all here, and rendering (unlike OCR) starts immediately on
 // file selection with no confirmation gate, so an oversized PDF could
-// already burn minutes of unstoppable main-thread work before the user
-// ever sees LARGE_BATCH_THRESHOLD's confirm() dialog in app.js.
+// already burn minutes of main-thread work before the user ever saw
+// LARGE_BATCH_THRESHOLD's confirm() dialog in app.js. (Cancel now exists —
+// see app.js's isRendering/isCancelled wiring — but the cap's own
+// justification below doesn't depend on that; it's kept below the point
+// where a single page's render time genuinely stops being sub-second.)
 //
 // Set from a real measured breaking point (scripts/measure-render-scaling.mjs),
 // not guessed: rendering a realistic full-resolution scanned page (A4 @
@@ -74,13 +77,12 @@ export function isPdfFile(file) {
 // with flat memory (no leak, ~5MB heap growth even at 500-600 pages) —
 // there's no crash or technical ceiling in the tested range, only time.
 // 500 pages rendered successfully in 163s; 600 pages exceeded a 3-minute
-// practical ceiling (chosen because this app has no progress bar beyond
-// the per-page status list and no pause/cancel once a run starts).
-// Combined with real measured OCR cost for degraded/scanned content
-// (~1.7s/page, docs/PERFORMANCE.md's DPI sweep), a 300-page document's
-// worst-case total (render + OCR) is ~10 minutes — already a lot, but a
-// real margin below the 500-page point actually verified safe, and below
-// the 600-page point where pure rendering alone already became
+// practical ceiling chosen for that measurement run. Combined with real
+// measured OCR cost for degraded/scanned content (~1.7s/page,
+// docs/PERFORMANCE.md's DPI sweep), a 300-page document's worst-case total
+// (render + OCR) is ~10 minutes — already a lot even with Cancel available,
+// and a real margin below the 500-page point actually verified safe, and
+// below the 600-page point where pure rendering alone already became
 // impractical.
 export const MAX_PDF_PAGES = 300;
 
@@ -93,8 +95,19 @@ export const MAX_PDF_PAGES = 300;
  * multi-image batch feature already applies to OCR itself. A PDF with
  * more than MAX_PDF_PAGES pages is rejected outright, before the
  * expensive per-page render loop starts.
+ *
+ * `isCancelled` is checked once per page (not mid-render) — cancel latency
+ * here is bounded by one page's render time, not instant. That's a
+ * deliberate choice, not an oversight: pdf.js's RenderTask does support a
+ * true mid-page `.cancel()`, but wiring it up means distinguishing a
+ * user-cancelled render from a genuine page error (so onPageError doesn't
+ * misreport a cancel as a page failure) for a latency window that's
+ * already sub-second at the shipped DPI. `onPageStart` exists because this
+ * loop previously had zero per-page UI feedback at all — without it, a
+ * cancelled render would just silently produce a shorter file list with no
+ * indication of what happened partway through.
  */
-export async function pdfToImageFiles(file, { dpi = DEFAULT_RENDER_DPI, onPageError } = {}) {
+export async function pdfToImageFiles(file, { dpi = DEFAULT_RENDER_DPI, onPageError, onPageStart, isCancelled } = {}) {
   const scale = dpi / 72;
   const baseName = file.name.replace(/\.pdf$/i, '');
   const buffer = await file.arrayBuffer();
@@ -109,6 +122,8 @@ export async function pdfToImageFiles(file, { dpi = DEFAULT_RENDER_DPI, onPageEr
 
   const files = [];
   for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber++) {
+    if (isCancelled?.()) break;
+    onPageStart?.(pageNumber, pdf.numPages);
     try {
       const page = await pdf.getPage(pageNumber);
       const viewport = page.getViewport({ scale });

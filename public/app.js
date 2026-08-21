@@ -14,6 +14,7 @@ import { zipBlobs } from './zip-export.js';
 const fileInput = document.getElementById('file-input');
 const fileList = document.getElementById('file-list');
 const runButton = document.getElementById('run');
+const cancelButton = document.getElementById('cancel');
 const statusEl = document.getElementById('status');
 const resultSection = document.getElementById('result-section');
 const resultEl = document.getElementById('result');
@@ -38,6 +39,33 @@ let worker = null;
 // from under the running loop below. This flag is checked regardless of how
 // the event arrived.
 let isRunning = false;
+// Same reasoning as isRunning, for the PDF-rendering phase (which starts on
+// file selection, before Run is ever clicked, and previously had no lock at
+// all — see MAX_PDF_PAGES's history in pdf-to-images.js).
+let isRendering = false;
+
+// Cancellation for both busy phases above. worker.terminate() (tesseract.js)
+// does NOT reject an in-flight recognize() call — the pending promise is
+// only ever settled by the worker's own message handler, which never fires
+// again once the worker is killed. Confirmed directly from tesseract.js's
+// source before relying on it: a bare `await worker.recognize(file)` would
+// hang forever if cancelled this way. So cancellation races the in-flight
+// work against this signal instead of trying to interrupt it directly —
+// see the Promise.race in the recognize loop below. The render loop doesn't
+// need this (pdf.js page renders are cheap enough — sub-second — to just
+// check a flag once per page instead).
+let cancelRequested = false;
+let cancelResolve = null;
+let cancelPromise = null;
+function beginCancelable() {
+  cancelRequested = false;
+  cancelPromise = new Promise((resolve) => { cancelResolve = resolve; });
+}
+function setCancelVisible(visible) {
+  cancelButton.hidden = !visible;
+  cancelButton.disabled = false;
+  cancelButton.textContent = 'Cancel';
+}
 
 // A batch above this size gets a confirmation with a time estimate before
 // starting, rather than silently kicking off a multi-minute run on one
@@ -115,7 +143,7 @@ function buildCombinedText(results) {
 }
 
 fileInput.addEventListener('change', async () => {
-  if (isRunning) return;
+  if (isRunning || isRendering) return;
   clearPreviewUrls();
   const rawFiles = Array.from(fileInput.files ?? []);
   resultSection.hidden = true;
@@ -125,14 +153,24 @@ fileInput.addEventListener('change', async () => {
   // time, not at Run time — so the file list the user sees before clicking
   // Run is exactly what will actually be processed, and Run itself never
   // needs to know a PDF was ever involved: it's the same File[] pipeline
-  // multi-image batches already use.
+  // multi-image batches already use. Cancellation is only wired up for this
+  // whole phase when a PDF is actually involved — a plain image selection
+  // is effectively instant and never needs a lock or a Cancel button.
   const hasPdf = rawFiles.some(isPdfFile);
-  if (hasPdf) statusEl.textContent = 'Rendering PDF page(s)…';
+  if (hasPdf) {
+    isRendering = true;
+    beginCancelable();
+    setCancelVisible(true);
+    fileInput.disabled = true;
+    statusEl.textContent = 'Rendering PDF page(s)…';
+  }
 
   const expanded = [];
   const groups = [];
   const renderErrors = [];
+  let cancelledRender = false;
   for (const file of rawFiles) {
+    if (hasPdf && cancelRequested) { cancelledRender = true; break; }
     if (!isPdfFile(file)) {
       groups.push({ name: file.name, indices: [expanded.length] });
       expanded.push(file);
@@ -140,6 +178,10 @@ fileInput.addEventListener('change', async () => {
     }
     try {
       const pages = await pdfToImageFiles(file, {
+        isCancelled: () => cancelRequested,
+        onPageStart: (pageNumber, totalPages) => {
+          statusEl.textContent = `Rendering ${file.name}: page ${pageNumber} of ${totalPages}…`;
+        },
         onPageError: (pageNumber, error) => {
           renderErrors.push(`${file.name} page ${pageNumber}: ${error?.message ?? error}`);
         },
@@ -147,6 +189,7 @@ fileInput.addEventListener('change', async () => {
       const startIndex = expanded.length;
       groups.push({ name: file.name, indices: pages.map((_, i) => startIndex + i) });
       expanded.push(...pages);
+      if (cancelRequested) { cancelledRender = true; break; }
     } catch (error) {
       renderErrors.push(`${file.name}: ${error?.message ?? error}`);
     }
@@ -154,10 +197,20 @@ fileInput.addEventListener('change', async () => {
 
   selectedFiles = expanded;
   fileGroups = groups;
-  statusEl.textContent = renderErrors.length > 0
-    ? `Rendered with errors — ${renderErrors.join('; ')}`
-    : '';
+  if (cancelledRender) {
+    statusEl.textContent = `Cancelled — rendered ${expanded.length} page(s)/image(s) before stopping.`;
+  } else {
+    statusEl.textContent = renderErrors.length > 0
+      ? `Rendered with errors — ${renderErrors.join('; ')}`
+      : '';
+  }
   renderFileList();
+
+  if (hasPdf) {
+    isRendering = false;
+    setCancelVisible(false);
+    fileInput.disabled = false;
+  }
 
   runButton.disabled = selectedFiles.length === 0;
   runButton.textContent = selectedFiles.length > 1
@@ -182,7 +235,7 @@ runButton.addEventListener('click', async () => {
     const estimate = formatEstimate(estimateRunSeconds(selectedFiles.length));
     const proceed = window.confirm(
       `This will run OCR on ${selectedFiles.length} pages/images, estimated ${estimate}. ` +
-      `There's no pause or cancel once it starts. Continue?`
+      `You can cancel it at any time once it starts. Continue?`
     );
     if (!proceed) {
       isRunning = false;
@@ -190,6 +243,14 @@ runButton.addEventListener('click', async () => {
       return;
     }
   }
+
+  // Cancel's visibility is deliberately wired here, after the confirm()
+  // gate above resolves — not as a direct reaction to isRunning, which is
+  // already true before that gate (for the double-click guard above). If
+  // it just followed isRunning, it would flash visible behind the native
+  // confirm() dialog, a button nothing could actually reach while it's up.
+  beginCancelable();
+  setCancelVisible(true);
 
   // A new selection mid-run would reassign selectedFiles/fileGroups out
   // from under the loop below — silently truncating it, and pairing the
@@ -200,6 +261,7 @@ runButton.addEventListener('click', async () => {
   statusEl.textContent = 'Loading OCR engine…';
 
   const results = [];
+  let wasCancelled = false;
 
   try {
     // One worker for the whole batch, not one per image — creating a
@@ -219,6 +281,7 @@ runButton.addEventListener('click', async () => {
     });
 
     for (let i = 0; i < selectedFiles.length; i++) {
+      if (cancelRequested) { wasCancelled = true; break; }
       const file = selectedFiles[i];
       const prefix = selectedFiles.length > 1
         ? `Recognizing ${i + 1} of ${selectedFiles.length} (${file.name}): `
@@ -227,11 +290,28 @@ runButton.addEventListener('click', async () => {
       statusEl.textContent = `${prefix}…`;
       setFileStatus(i, 'Recognizing…', 'working');
 
-      try {
-        const { data } = await worker.recognize(file);
-        results.push({ name: file.name, text: data.text });
+      // worker.terminate() does not reject an in-flight recognize() call
+      // (see the note by cancelPromise's declaration above) — so cancelling
+      // can't interrupt the awaited call directly. Racing it against the
+      // cancel signal instead: if cancel wins, the recognize() promise is
+      // simply abandoned (never awaited again) rather than relied on to
+      // settle, and the worker is terminated for cleanup in the `finally`
+      // block below regardless of which branch this took.
+      const outcome = await Promise.race([
+        worker.recognize(file).then(
+          ({ data }) => ({ type: 'done', data }),
+          (error) => ({ type: 'error', error }),
+        ),
+        cancelPromise.then(() => ({ type: 'cancelled' })),
+      ]);
+
+      if (outcome.type === 'cancelled') {
+        wasCancelled = true;
+        break;
+      } else if (outcome.type === 'done') {
+        results.push({ name: file.name, text: outcome.data.text });
         setFileStatus(i, 'Done', 'done');
-      } catch (error) {
+      } else {
         // One bad image (corrupt file, unsupported content) shouldn't sink
         // the rest of the batch — record it and keep going, the same way
         // this fixed once for silent-partial-result bugs shouldn't repeat.
@@ -244,9 +324,19 @@ runButton.addEventListener('click', async () => {
         // shows this message (status pill, preview text, the .docx
         // placeholder) inherits the clean version instead of fixing each
         // display site separately.
-        const message = (error?.message ?? String(error)).replace(/^error:\s*/i, '');
+        const message = (outcome.error?.message ?? String(outcome.error)).replace(/^error:\s*/i, '');
         results.push({ name: file.name, error: message });
         setFileStatus(i, `Error: ${message}`, 'error');
+      }
+    }
+
+    // Marks both the item that was in flight when cancel landed and every
+    // item that never started — results.length is exactly the count of
+    // items that got a real (done/error) outcome, since cancelled items
+    // are never pushed to it.
+    if (wasCancelled) {
+      for (let j = results.length; j < selectedFiles.length; j++) {
+        setFileStatus(j, 'Cancelled', 'cancelled');
       }
     }
 
@@ -282,7 +372,13 @@ runButton.addEventListener('click', async () => {
       fileGroups.map(async (group) => {
         const name = uniqueDocxName(group.name);
         const pages = group.indices.map((i) => {
+          // Cancelling before every item finishes leaves indices beyond
+          // where the loop broke with no entry in `results` at all —
+          // guard against that rather than letting `undefined.error` throw
+          // (a real gap, not hypothetical: cancelling before item 0
+          // finishes leaves `results` empty).
           const r = results[i];
+          if (!r) return '[Cancelled — not recognized]';
           return r.error ? `[Error recognizing this page: ${r.error}]` : r.text;
         });
         const blob = await buildDocxBlob(pages);
@@ -292,10 +388,19 @@ runButton.addEventListener('click', async () => {
     downloadButton.textContent = docxOutputs.length > 1 ? 'Download .zip' : 'Download .docx';
     downloadButton.disabled = docxOutputs.length === 0;
 
-    const allFailed = results.every((r) => r.error);
-    statusEl.textContent = allFailed
-      ? `Error: all ${results.length} file(s) failed to recognize`
-      : 'Done.';
+    if (wasCancelled) {
+      statusEl.textContent = `Cancelled — ${results.length} of ${selectedFiles.length} recognized.`;
+    } else {
+      // results.length > 0 guards against [].every() on an empty array
+      // vacuously returning true — not reachable via this branch today
+      // (wasCancelled is checked first, and a non-cancelled run always
+      // processes every selected file), but kept as an explicit guard
+      // rather than relying on that invariant silently holding forever.
+      const allFailed = results.length > 0 && results.every((r) => r.error);
+      statusEl.textContent = allFailed
+        ? `Error: all ${results.length} file(s) failed to recognize`
+        : 'Done.';
+    }
   } catch (error) {
     const message = String(error?.message ?? error).replace(/^error:\s*/i, '');
     statusEl.textContent = `Error: ${message}`;
@@ -308,7 +413,22 @@ runButton.addEventListener('click', async () => {
     isRunning = false;
     fileInput.disabled = false;
     runButton.disabled = false;
+    setCancelVisible(false);
   }
+});
+
+cancelButton.addEventListener('click', () => {
+  // Guarded the same way isRunning is checked "regardless of how the event
+  // arrived" — not just relying on the button being hidden.
+  if (!isRendering && !isRunning) return;
+  cancelRequested = true;
+  cancelResolve?.();
+  // Immediate feedback: there's a real window between this click and the
+  // loop actually observing cancelRequested — near-instant for the
+  // recognize phase (the in-flight Promise.race resolves right away), up
+  // to one page's render time for the render phase.
+  cancelButton.disabled = true;
+  cancelButton.textContent = 'Cancelling…';
 });
 
 copyButton.addEventListener('click', async () => {

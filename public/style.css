@@ -307,6 +307,14 @@ h1 .grad {
   background: color-mix(in srgb, var(--primary) 12%, transparent);
   border-color: color-mix(in srgb, var(--primary) 30%, transparent);
 }
+/* Skipped by a user-initiated Cancel — a distinct, deliberately quieter
+   treatment from "error" (which means something actually went wrong). */
+.file-status[data-state="cancelled"] {
+  color: var(--muted);
+  background: transparent;
+  border-color: var(--card-border);
+  border-style: dashed;
+}
 
 /* ---- status line ---- */
 #status {
