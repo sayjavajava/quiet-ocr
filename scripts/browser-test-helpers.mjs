@@ -78,8 +78,20 @@ export async function waitForStatus(page, predicate, options = {}) {
   return waitForText(page, "#status", predicate, { label: "status", ...options });
 }
 
-/** General form of waitForStatus, for any element's text content — e.g. a button label that changes after a tap (see the "Copied!" check in verify.mjs). */
-export async function waitForText(page, selector, predicate, { timeoutMs, intervalMs = 300, label = selector } = {}) {
+/**
+ * General form of waitForStatus, for any element's text content — e.g. a
+ * button label that changes after a tap (see the "Copied!" check in
+ * verify.mjs). Default interval is deliberately tight (50ms), not a
+ * round-number guess: found the hard way that #status can pass through a
+ * transient state (e.g. "Recognizing…") and settle on its final value in
+ * well under 300ms for the smallest fixture — a 300ms poll interval
+ * missed that transient state outright on some runs (confirmed directly:
+ * a 10ms-interval diagnostic saw it reliably in 5/5 runs, each completing
+ * in ~650-700ms total, meaning the transient window itself can be
+ * narrower than 300ms). Cheap enough to poll this often — it's a single
+ * page.textContent() call each time.
+ */
+export async function waitForText(page, selector, predicate, { timeoutMs, intervalMs = 50, label = selector } = {}) {
   const deadline = Date.now() + timeoutMs;
   for (;;) {
     const text = await page.textContent(selector);

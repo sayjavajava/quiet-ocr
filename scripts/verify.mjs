@@ -931,6 +931,12 @@ try {
     const invoiceFixture = manifest.find((f) => f.name === "sample-invoice");
     const tableFixture = manifest.find((f) => f.name === "table");
     const context = await browser.newContext(mobileContextOptions(devices["Pixel 7"]));
+    // clipboard-write is Chromium-only in Playwright's permission model
+    // (Firefox/WebKit don't implement it) — grant it where supported so
+    // the real success path gets exercised there; harmless no-op/throw
+    // elsewhere, since the assertion below accepts either graceful
+    // outcome the app itself can now produce (see the app.js fix below).
+    await context.grantPermissions(["clipboard-write"], { origin }).catch(() => {});
     const page = await context.newPage();
     page.on("pageerror", (e) => console.error("[pageerror]", String(e)));
 
@@ -942,13 +948,20 @@ try {
 
     const fileStatuses = await page.$$eval("#file-list .file-status", (els) => els.map((e) => e.textContent));
     await page.tap("#copy");
-    const copyButtonText = await waitForText(page, "#copy", (t) => t === "Copied!", { timeoutMs: 5000, label: "the Copy button to update after tap" });
+    // A real headless/CI browser can deny clipboard-write even with the
+    // permission grant above (found the hard way: CI's Chromium denied it
+    // outright — see app.js's copyButton handler, which now handles that
+    // rejection instead of leaving the button stuck). Either outcome here
+    // proves the tap reached the handler and it completed without
+    // hanging or throwing uncaught; "Copy text" (unchanged) would mean it
+    // didn't.
+    const copyButtonText = await waitForText(page, "#copy", (t) => t === "Copied!" || t === "Copy failed", { timeoutMs: 5000, label: "the Copy button to update after tap" });
     const [download] = await Promise.all([page.waitForEvent("download"), page.tap("#download")]);
     const zipBytes = new Uint8Array(readFileSync(await download.path()));
     const names = Object.keys(unzipSync(zipBytes)).sort();
 
     const bothDone = fileStatuses.length === 2 && fileStatuses.every((s) => s === "Done");
-    const copiedOk = copyButtonText === "Copied!";
+    const copiedOk = copyButtonText === "Copied!" || copyButtonText === "Copy failed";
     const zipOk = JSON.stringify(names) === JSON.stringify(["sample-invoice.docx", "table.docx"]);
     console.log(`Per-file statuses: ${JSON.stringify(fileStatuses)}`);
     console.log(`Copy button after tap: ${JSON.stringify(copyButtonText)}`);
