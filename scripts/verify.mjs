@@ -941,12 +941,19 @@ try {
     const invoiceFixture = manifest.find((f) => f.name === "sample-invoice");
     const tableFixture = manifest.find((f) => f.name === "table");
     const context = await browser.newContext(mobileContextOptions(devices["Pixel 7"]));
-    // clipboard-write is Chromium-only in Playwright's permission model
-    // (Firefox/WebKit don't implement it) — grant it where supported so
-    // the real success path gets exercised there; harmless no-op/throw
-    // elsewhere, since the assertion below accepts either graceful
-    // outcome the app itself can now produce (see the app.js fix below).
-    await context.grantPermissions(["clipboard-write"], { origin }).catch(() => {});
+    // clipboard-write is Chromium-only in Playwright's permission model —
+    // grant it there so the real success path gets exercised, and skip it
+    // entirely elsewhere rather than relying on a .catch() around the
+    // call: confirmed the hard way that on WebKit, granting an unsupported
+    // permission doesn't reject grantPermissions() itself — it silently
+    // records an error that's deferred and thrown on the *next* context
+    // operation (context.newPage() here), so a .catch() on the grant call
+    // never sees it. Either way the assertion below accepts both graceful
+    // outcomes the app itself can now produce (see the app.js fix below),
+    // so skipping the grant on unsupported engines costs nothing.
+    if (engineName === "chromium") {
+      await context.grantPermissions(["clipboard-write"], { origin });
+    }
     const page = await context.newPage();
     page.on("pageerror", (e) => console.error("[pageerror]", String(e)));
 
