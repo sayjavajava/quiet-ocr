@@ -20,7 +20,7 @@
  * Chromium Playwright can launch (set PLAYWRIGHT_CHROMIUM_PATH to a local
  * install if the default download isn't available).
  */
-import { chromium, firefox, webkit } from "playwright";
+import { chromium, firefox, webkit, devices } from "playwright";
 import { readFileSync, existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { unzipSync, strFromU8 } from "fflate";
@@ -821,6 +821,93 @@ try {
       failed = true;
     } else {
       console.log("✓ Download button is inaccessible (parent section hidden) for the duration of a run.");
+    }
+    await context.close();
+  }
+
+  // --- Mobile viewport & touch emulation: this project has zero
+  // responsive media queries (public/style.css relies entirely on fluid
+  // sizing — clamp(), max-width, percentage padding) and had never
+  // actually been driven with touch input before. Real device profiles
+  // (viewport, user agent, hasTouch, isMobile) via Playwright's bundled
+  // `devices`, not guessed dimensions. `isMobile` is documented as
+  // unsupported on Firefox, so it's stripped from the context options
+  // only on that engine — hasTouch and the narrow viewport itself, the
+  // parts that actually matter for this check, apply on every engine. ---
+  {
+    console.log(`\n=== mobile: layout fits without horizontal overflow ===`);
+    const layoutDevices = [
+      { name: "iPhone SE (320px, narrowest common device)", profile: devices["iPhone SE"] },
+      { name: "Pixel 7 (412px)", profile: devices["Pixel 7"] },
+    ];
+    let allOk = true;
+    for (const { name, profile } of layoutDevices) {
+      const { isMobile, ...withoutIsMobile } = profile;
+      const contextOptions = engineName === "firefox" ? withoutIsMobile : profile;
+      const context = await browser.newContext(contextOptions);
+      const page = await context.newPage();
+      page.on("pageerror", (e) => console.error("[pageerror]", String(e)));
+      await page.goto(`${origin}/index.html`, { waitUntil: "load" });
+
+      const { scrollWidth, viewportWidth } = await page.evaluate(() => ({
+        scrollWidth: document.documentElement.scrollWidth,
+        viewportWidth: window.innerWidth,
+      }));
+      const runBox = await page.$eval("#run", (el) => el.getBoundingClientRect());
+      const pickerBox = await page.$eval(".picker-btn", (el) => el.getBoundingClientRect());
+      const noOverflow = scrollWidth <= viewportWidth;
+      const runVisible = runBox.left >= 0 && runBox.right <= viewportWidth;
+      const pickerVisible = pickerBox.left >= 0 && pickerBox.right <= viewportWidth;
+      const ok = noOverflow && runVisible && pickerVisible;
+      allOk &&= ok;
+      console.log(`  ${name}: scrollWidth=${scrollWidth} viewport=${viewportWidth} (${noOverflow ? "no overflow" : "OVERFLOW"}), Run button in-bounds: ${runVisible}, Choose Files in-bounds: ${pickerVisible} ${ok ? "✓" : "✗"}`);
+      await context.close();
+    }
+    if (!allOk) {
+      console.error("✗ FAILED: layout overflows or clips a key control at a real mobile viewport width.");
+      failed = true;
+    } else {
+      console.log("✓ No horizontal overflow and key controls stay in-bounds at both device widths.");
+    }
+  }
+
+  // --- Mobile: a real end-to-end run driven with touch input (tap(), not
+  // click()) on a real narrow-viewport device profile — confirms the app's
+  // actual controls work under touch, not just mouse. File selection
+  // itself still goes through setInputFiles(): no automation tool can
+  // drive a real OS file-picker dialog regardless of touch/mobile
+  // emulation, on any engine — that's a platform limitation the app's own
+  // code has no way to satisfy either way. What this actually tests is
+  // that a touch tap on Run and Download work at all, on a real narrow
+  // viewport, all the way through a real recognition. ---
+  {
+    console.log(`\n=== mobile: full run driven by touch (tap) on iPhone SE viewport ===`);
+    const invoiceFixture = manifest.find((f) => f.name === "sample-invoice");
+    const profile = devices["iPhone SE"];
+    const { isMobile, ...withoutIsMobile } = profile;
+    const contextOptions = engineName === "firefox" ? withoutIsMobile : profile;
+    const context = await browser.newContext(contextOptions);
+    const page = await context.newPage();
+    page.on("pageerror", (e) => console.error("[pageerror]", String(e)));
+
+    await page.goto(`${origin}/index.html`, { waitUntil: "load" });
+    await page.setInputFiles("#file-input", `${FIXTURE_DIR}${invoiceFixture.file}`);
+    await waitForRunEnabled(page, { timeoutMs: 10000 });
+    await page.tap("#run");
+    await waitForStatus(page, (s) => s === "Done.", { timeoutMs: 30000, label: "the run to finish" });
+
+    const recognized = (await page.inputValue("#result")).trim();
+    const [download] = await Promise.all([page.waitForEvent("download"), page.tap("#download")]);
+    const downloadOk = !!(await download.path());
+
+    const ok = recognized === invoiceFixture.expectedText && downloadOk;
+    console.log(`Recognized via touch-driven run: ${JSON.stringify(recognized)}`);
+    console.log(`Download tapped successfully: ${downloadOk}`);
+    if (!ok) {
+      console.error("✗ FAILED: a touch-driven run on a mobile viewport didn't complete correctly.");
+      failed = true;
+    } else {
+      console.log("✓ Full run (tap Run, tap Download) works correctly on a real mobile viewport with touch input.");
     }
     await context.close();
   }
