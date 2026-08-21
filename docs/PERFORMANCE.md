@@ -112,8 +112,49 @@ permanent fixture in `test/fixtures/manifest.json`, checked in CI at an 85% thre
 margin below the 95%/100% measured above), so this default is now actually regression-tested
 against raster/degraded content — not just vector text.
 
-**Known gaps, not yet addressed:** no page-count cap or time-estimate warning before running
-a large PDF (a 100-page PDF at these per-page costs is several minutes with no progress
-beyond the per-page status list), and rendering happens synchronously in the same
-main-thread loop that drives the UI — negligible at 2-3 pages, unverified at real-world PDF
-sizes.
+## Large-batch confirmation
+
+A batch above `LARGE_BATCH_THRESHOLD` (25 items — see `public/app.js`) — the realistic way
+to hit this is a single large PDF, expanded to one page-image per page before the count is
+checked — shows a confirmation dialog with a time estimate
+(`~1.7s/item + 0.5s engine load`) before starting, since a multi-minute run shouldn't begin
+on one click with no warning. That estimate is deliberately conservative; see the real
+60-page measurement below for how it compares to an actual run.
+
+## A truly large PDF, end-to-end
+
+`scripts/verify-large-pdf.mjs` drives a genuinely large PDF (60 pages, generated on the fly
+with distinct, known text per page — not committed, same reasoning as `large-photo` above)
+through the real pipeline in a real browser: render every page → OCR every page with one
+worker → download the resulting `.docx` and check every single page's content and order,
+not just that the run completed. Separate from `npm run verify` because it's genuinely slow
+by design; run it by hand with `npm run build && npm run verify-large-pdf`.
+
+Real measured run (2026-08-21, headless Chromium):
+
+| Phase                          | Time     |
+| ------------------------------- | --------: |
+| Render (60 pages)               | 1.2 s     |
+| Engine load                     | 1.1 s     |
+| Recognize (60 pages)            | 54.1 s (~902 ms/page) |
+| **Total**                       | **56.4 s** |
+
+- **Every one of the 60 pages** came back at or above 96.2% word accuracy (worst: page 34),
+  in the correct order, correctly paired with its own page break in the `.docx` — the
+  render→OCR→export pipeline holds up at this scale, not just at 2-3 pages.
+- **JS heap grew from 3.3 MB to 6.4 MB** across the full run (measured via the CDP
+  `Performance.getMetrics` `JSHeapUsedSize` counter) — modest growth, no runaway leak, for
+  a run that creates 60 canvases/blobs and one long-lived Tesseract worker.
+- **The real run (56s) is well under half the confirmation dialog's own conservative
+  estimate (~102s for 60 items)** — the estimate is intentionally pessimistic (see above),
+  and this is the first real data point confirming it errs in the safe direction rather
+  than underselling how long a large run actually takes.
+- The main-thread rendering loop referenced above did **not** visibly stall or drop input
+  during this run at 60 pages; whether that holds at, say, 500+ pages remains unverified —
+  the synchronous main-thread design itself is unchanged.
+
+**Known gaps, not yet addressed:** no hard page-count cap — the confirmation dialog above
+warns before a large run starts, but nothing stops a user from confirming an arbitrarily
+large PDF, and there's still no pause/cancel once a run is underway. Rendering also still
+happens synchronously in the same main-thread loop that drives the UI; it held up fine at
+60 pages (measured above), but a genuinely huge PDF (hundreds of pages) is still unverified.
