@@ -312,8 +312,17 @@ runButton.addEventListener('click', async () => {
 });
 
 copyButton.addEventListener('click', async () => {
-  await navigator.clipboard.writeText(resultEl.value);
-  copyButton.textContent = 'Copied!';
+  // navigator.clipboard.writeText() can reject — a real browser can deny
+  // clipboard-write for reasons outside this page's control (permission
+  // policy, an embedding context, a locked-down browser profile), not
+  // just in an automated/headless environment. Silently doing nothing on
+  // that rejection would leave a user thinking the copy worked.
+  try {
+    await navigator.clipboard.writeText(resultEl.value);
+    copyButton.textContent = 'Copied!';
+  } catch {
+    copyButton.textContent = 'Copy failed';
+  }
   setTimeout(() => { copyButton.textContent = 'Copy text'; }, 1500);
 });
 
