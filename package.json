@@ -16,6 +16,7 @@
     "verify-large-pdf": "node scripts/verify-large-pdf.mjs",
     "gen-fixtures": "node scripts/generate-test-fixture.mjs",
     "measure-accuracy": "node scripts/measure-fixture-accuracy.mjs",
+    "measure-render-scaling": "node scripts/measure-render-scaling.mjs",
     "bench": "node scripts/bench.mjs"
   },
   "devDependencies": {

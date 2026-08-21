@@ -153,8 +153,49 @@ Real measured run (2026-08-21, headless Chromium):
   during this run at 60 pages; whether that holds at, say, 500+ pages remains unverified —
   the synchronous main-thread design itself is unchanged.
 
-**Known gaps, not yet addressed:** no hard page-count cap — the confirmation dialog above
-warns before a large run starts, but nothing stops a user from confirming an arbitrarily
-large PDF, and there's still no pause/cancel once a run is underway. Rendering also still
-happens synchronously in the same main-thread loop that drives the UI; it held up fine at
-60 pages (measured above), but a genuinely huge PDF (hundreds of pages) is still unverified.
+## How far rendering scales, and where the hard cap comes from
+
+`scripts/measure-render-scaling.mjs` drives `public/pdf-to-images.js`'s render phase directly
+(file selection only — it never clicks Run, so OCR time is excluded entirely) across escalating
+page counts, in two content profiles, since the real limit depends on what's actually on each
+page, not just the count:
+
+- **scan**: one real, full-resolution scanned-page image (A4 @ 300dpi, 2480×3508 — the same
+  synthetic shape `scripts/bench.mjs` uses for OCR benchmarking) reused on every page. This is
+  the realistic worst case — an actual phone-scanned or flatbed-scanned document, which is what
+  someone hitting a real page-count problem is most likely to have selected.
+- **text**: clean vector text per page (`sample-multipage.pdf`'s style) — the cheap case, for
+  contrast.
+
+Real measured results (2026-08-21, headless Chromium):
+
+| Profile | Last fully successful | Broke at | How |
+| --- | ---: | ---: | --- |
+| scan (full-res image/page) | 500 pages (163.3 s, ~327 ms/page) | 600 pages | exceeded a 3-minute practical timeout |
+| text (vector text/page) | 8,000 pages (139.8 s, ~17 ms/page) | 16,000 pages | exceeded the same 3-minute timeout |
+
+**Neither profile ever crashed or ran out of memory** in the tested range. JS heap stayed
+essentially flat the entire time (e.g. the scan profile: ~0.6 MB → 4.6–5.4 MB regardless of
+whether it was rendering 5 pages or 600) — no leak, garbage collection keeps up, and render time
+per page converges to a steady state rather than degrading. The only thing that actually broke
+either profile was a deliberately-chosen 3-minute ceiling, not a technical wall: this app has no
+progress bar beyond the per-page status list and no pause/cancel once a run starts, so a
+synchronous wait longer than that isn't a usable experience regardless of whether the browser
+would technically survive it.
+
+**`MAX_PDF_PAGES = 300`** (`public/pdf-to-images.js`) is set from this data, not guessed — a PDF
+over that page count is now rejected outright, before the expensive per-page render loop starts
+(checked via `pdf.numPages` immediately after the document loads), with a clear message telling
+the user to split the file. 300 pages is:
+- a real margin below 500 (the last realistic-scan page count actually verified safe) and below
+  600 (where pure rendering alone already became impractical);
+- combined with real measured OCR cost for degraded/scanned content (~1.7 s/page, the DPI sweep
+  above), a 300-page document's worst-case *total* time (render + OCR) is roughly 10 minutes —
+  already a lot for a no-cancel operation, which is exactly why the cap doesn't sit any higher
+  even though rendering alone stayed healthy well past that point.
+
+This closes half of the previously-flagged gap. **Still open:** there's still no pause/cancel
+once a run is underway (a 300-page worst-case document is still a real ~10-minute wait with no
+way to stop it), and rendering still happens synchronously in the same main-thread loop that
+drives the UI — that architecture is unchanged, it just now has a real, evidenced ceiling on how
+far it's ever asked to go.

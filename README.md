@@ -76,10 +76,11 @@ time against a single OCR engine instance (reused across the whole run, rather t
 result labelled by source filename in the on-screen preview. Selecting more than 25 pages/images
 shows a time estimate and asks for confirmation before starting, since a large run is genuinely
 long — a full page at scanning resolution takes ~17 seconds on its own, and there's no
-pause/cancel once it's running. See [`docs/PERFORMANCE.md`](docs/PERFORMANCE.md)'s "PDF input"
-section for the real numbers this is based on, including a real browser-compatibility issue found
-and fixed while building PDF support (a very recent JS engine method pdf.js depends on that not
-all current browsers have yet).
+pause/cancel once it's running. A single PDF is capped at 300 pages, rejected outright with a
+clear message before any page renders — set from a real measured breaking point, not a guess; see
+[`docs/PERFORMANCE.md`](docs/PERFORMANCE.md)'s "PDF input" section for the real numbers this is
+based on, including a real browser-compatibility issue found and fixed while building PDF support
+(a very recent JS engine method pdf.js depends on that not all current browsers have yet).
 
 **Output is a real Word document, not a text dump.** Each image or PDF becomes its own `.docx`
 (a multi-page PDF becomes one `.docx` with a real page break between each page's text, not a
