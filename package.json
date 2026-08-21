@@ -24,7 +24,7 @@
     "@fontsource-variable/space-grotesk": "^5.3.0",
     "@tesseract.js-data/eng": "1.0.0",
     "docx": "^9.7.1",
-    "fflate": "^0.8.2",
+    "fflate": "^0.8.3",
     "pdf-lib": "^1.17.1",
     "pdfjs-dist": "^6.2.108",
     "playwright": "^1.62.1",
