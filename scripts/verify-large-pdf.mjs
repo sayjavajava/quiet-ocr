@@ -33,7 +33,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { startServer } from "./serve.mjs";
 import { wordAccuracy } from "./text-accuracy.mjs";
-import { readDocxPages, selectFilesInBrowser } from "./browser-test-helpers.mjs";
+import { readDocxPages, selectFilesInBrowser, waitForStatus } from "./browser-test-helpers.mjs";
 
 const PAGE_COUNT = 60; // comfortably past LARGE_BATCH_THRESHOLD (25 in app.js)
 
@@ -66,24 +66,6 @@ async function buildLargePdf(pageCount) {
 
 function fmtMs(ms) {
   return ms < 1000 ? `${ms}ms` : `${(ms / 1000).toFixed(1)}s`;
-}
-
-/**
- * Polls #status by hand (fixed interval, generous cap) instead of
- * page.waitForFunction — a genuinely multi-minute run needs visibility
- * into what's happening while it happens, not a single opaque timeout at
- * the end. Returns the status text that satisfied `predicate`.
- */
-async function waitForStatus(page, predicate, { timeoutMs, intervalMs = 2000, label }) {
-  const deadline = Date.now() + timeoutMs;
-  for (;;) {
-    const status = await page.textContent("#status");
-    if (predicate(status)) return status;
-    if (Date.now() > deadline) {
-      throw new Error(`Timed out after ${fmtMs(timeoutMs)} waiting for ${label}. Last status: ${JSON.stringify(status)}`);
-    }
-    await page.waitForTimeout(intervalMs);
-  }
 }
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));

@@ -20,13 +20,14 @@
  * Chromium Playwright can launch (set PLAYWRIGHT_CHROMIUM_PATH to a local
  * install if the default download isn't available).
  */
-import { chromium } from "playwright";
+import { chromium, firefox, webkit, devices } from "playwright";
+import { AxeBuilder } from "@axe-core/playwright";
 import { readFileSync, existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { unzipSync, strFromU8 } from "fflate";
 import { startServer } from "./serve.mjs";
 import { wordAccuracy, parseLabelledBlocks } from "./text-accuracy.mjs";
-import { readDocxText, readDocxPages, selectFilesInBrowser } from "./browser-test-helpers.mjs";
+import { readDocxText, readDocxPages, selectFilesInBrowser, waitForStatus, waitForRunEnabled } from "./browser-test-helpers.mjs";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const PUBLIC_DIR = `${ROOT}public`;
@@ -70,9 +71,28 @@ const manifest = JSON.parse(readFileSync(`${FIXTURE_DIR}manifest.json`, "utf8"))
 const server = await startServer(PUBLIC_DIR, PORT);
 const origin = `http://127.0.0.1:${PORT}`;
 
+// BROWSER selects the real engine to run this whole suite against — the
+// same fixtures, the same UI, the same network-cleanliness check, just a
+// different rendering/JS engine underneath. Defaults to chromium (this
+// project's only committed, self-hosted engine locally); CI additionally
+// runs this against firefox and webkit in a matrix, which is the only way
+// a real engine-compatibility gap (like the Map.prototype.getOrInsertComputed
+// shim pdf-to-images.js needed for pdf.js) would actually show up — see
+// docs/PERFORMANCE.md's "PDF input" section for that history.
+const ENGINES = { chromium, firefox, webkit };
+const engineName = process.env.BROWSER ?? "chromium";
+const engine = ENGINES[engineName];
+if (!engine) {
+  console.error(`✗ Unknown BROWSER "${engineName}" — expected one of: ${Object.keys(ENGINES).join(", ")}.`);
+  process.exit(1);
+}
+
 const launchOptions = {};
-if (process.env.PLAYWRIGHT_CHROMIUM_PATH) launchOptions.executablePath = process.env.PLAYWRIGHT_CHROMIUM_PATH;
-const browser = await chromium.launch(launchOptions);
+if (engineName === "chromium" && process.env.PLAYWRIGHT_CHROMIUM_PATH) {
+  launchOptions.executablePath = process.env.PLAYWRIGHT_CHROMIUM_PATH;
+}
+console.log(`Running against: ${engineName}`);
+const browser = await engine.launch(launchOptions);
 
 let failed = false;
 const allRequests = [];
@@ -100,13 +120,11 @@ try {
     // that's not immediate: the change handler renders every page (see
     // pdf-to-images.js) before Run is enabled at all.
     await page.click("#run");
-    await page.waitForFunction(
-      () => document.getElementById("status").textContent === "Done." ||
-        /^Error:/.test(document.getElementById("status").textContent),
-      { timeout: 60000 },
-    );
+    const status = await waitForStatus(page, (s) => s === "Done." || /^Error:/.test(s), {
+      timeoutMs: 60000,
+      label: "the run to finish",
+    });
 
-    const status = await page.textContent("#status");
     if (status.startsWith("Error:")) {
       console.error(`✗ FAILED: page reported ${status}`);
       failed = true;
@@ -182,13 +200,11 @@ try {
     await page.goto(`${origin}/index.html`, { waitUntil: "load" });
     await page.setInputFiles("#file-input", batchPaths);
     await page.click("#run");
-    await page.waitForFunction(
-      () => document.getElementById("status").textContent === "Done." ||
-        /^Error:/.test(document.getElementById("status").textContent),
-      { timeout: 90000 },
-    );
+    const status = await waitForStatus(page, (s) => s === "Done." || /^Error:/.test(s), {
+      timeoutMs: 90000,
+      label: "the run to finish",
+    });
 
-    const status = await page.textContent("#status");
     const recognized = await page.inputValue("#result");
     const fileStatuses = await page.$$eval("#file-list .file-status", (els) => els.map((e) => e.textContent));
     console.log(`Status: ${status}`);
@@ -229,7 +245,7 @@ try {
 
     await page.goto(`${origin}/index.html`, { waitUntil: "load" });
     await page.setInputFiles("#file-input", manyPaths);
-    await page.waitForFunction(() => !document.getElementById("run").disabled);
+    await waitForRunEnabled(page);
 
     let dialogMessage = null;
     page.once("dialog", async (dialog) => {
@@ -274,9 +290,9 @@ try {
 
     await page.goto(`${origin}/index.html`, { waitUntil: "load" });
     await page.setInputFiles("#file-input", manyPaths);
-    await page.waitForFunction(() => !document.getElementById("run").disabled);
+    await waitForRunEnabled(page);
     await page.click("#run");
-    await page.waitForFunction(() => document.getElementById("status").textContent === "Done.", { timeout: 60000 });
+    await waitForStatus(page, (s) => s === "Done.", { timeoutMs: 60000, label: "the run to finish" });
 
     const fileStatuses = await page.$$eval("#file-list .file-status", (els) => els.map((e) => e.textContent));
     const [download] = await Promise.all([page.waitForEvent("download"), page.click("#download")]);
@@ -323,10 +339,10 @@ try {
     page.on("pageerror", (e) => console.error("[pageerror]", String(e)));
     await page.goto(`${origin}/index.html`, { waitUntil: "load" });
     await selectFilesInBrowser(page, [{ name: unicodeName, b64: invoiceB64, type: "image/png" }]);
-    await page.waitForFunction(() => !document.getElementById("run").disabled, { timeout: 10000 });
+    await waitForRunEnabled(page, { timeoutMs: 10000 });
     const listedName = await page.textContent("#file-list .file-name");
     await page.click("#run");
-    await page.waitForFunction(() => document.getElementById("status").textContent === "Done.", { timeout: 30000 });
+    await waitForStatus(page, (s) => s === "Done.", { timeoutMs: 30000, label: "the run to finish" });
 
     const realDownloadName = await page.evaluate(() => new Promise((resolve) => {
       const originalCreateElement = document.createElement.bind(document);
@@ -369,9 +385,9 @@ try {
       { name: unicodeName, b64: invoiceB64, type: "image/png" },
       { name: tableFixture.file, b64: tableB64, type: "image/png" },
     ]);
-    await page.waitForFunction(() => !document.getElementById("run").disabled, { timeout: 10000 });
+    await waitForRunEnabled(page, { timeoutMs: 10000 });
     await page.click("#run");
-    await page.waitForFunction(() => document.getElementById("status").textContent === "Done.", { timeout: 30000 });
+    await waitForStatus(page, (s) => s === "Done.", { timeoutMs: 30000, label: "the run to finish" });
 
     const [download] = await Promise.all([page.waitForEvent("download"), page.click("#download")]);
     const zipBytes = new Uint8Array(readFileSync(await download.path()));
@@ -406,7 +422,7 @@ try {
     await page.goto(`${origin}/index.html`, { waitUntil: "load" });
     await page.setInputFiles("#file-input", `${FIXTURE_DIR}${invoiceFixture.file}`);
     await page.click("#run");
-    await page.waitForFunction(() => document.getElementById("status").textContent === "Done.", { timeout: 60000 });
+    await waitForStatus(page, (s) => s === "Done.", { timeoutMs: 60000, label: "the run to finish" });
 
     const label = await page.textContent("#download");
     const [download] = await Promise.all([page.waitForEvent("download"), page.click("#download")]);
@@ -438,7 +454,7 @@ try {
     await page.goto(`${origin}/index.html`, { waitUntil: "load" });
     await page.setInputFiles("#file-input", [`${FIXTURE_DIR}${invoiceFixture.file}`, `${FIXTURE_DIR}${tableFixture.file}`]);
     await page.click("#run");
-    await page.waitForFunction(() => document.getElementById("status").textContent === "Done.", { timeout: 60000 });
+    await waitForStatus(page, (s) => s === "Done.", { timeoutMs: 60000, label: "the run to finish" });
 
     const label = await page.textContent("#download");
     const [download] = await Promise.all([page.waitForEvent("download"), page.click("#download")]);
@@ -470,9 +486,9 @@ try {
 
     await page.goto(`${origin}/index.html`, { waitUntil: "load" });
     await page.setInputFiles("#file-input", `${FIXTURE_DIR}${pdfFixture.file}`);
-    await page.waitForFunction(() => !document.getElementById("run").disabled, { timeout: 20000 });
+    await waitForRunEnabled(page, { timeoutMs: 20000 });
     await page.click("#run");
-    await page.waitForFunction(() => document.getElementById("status").textContent === "Done.", { timeout: 60000 });
+    await waitForStatus(page, (s) => s === "Done.", { timeoutMs: 60000, label: "the run to finish" });
 
     const label = await page.textContent("#download");
     const [download] = await Promise.all([page.waitForEvent("download"), page.click("#download")]);
@@ -511,9 +527,9 @@ try {
 
     await page.goto(`${origin}/index.html`, { waitUntil: "load" });
     await page.setInputFiles("#file-input", `${FIXTURE_DIR}${pdfFixture.file}`);
-    await page.waitForFunction(() => !document.getElementById("run").disabled, { timeout: 20000 });
+    await waitForRunEnabled(page, { timeoutMs: 20000 });
     await page.click("#run");
-    await page.waitForFunction(() => document.getElementById("status").textContent === "Done.", { timeout: 60000 });
+    await waitForStatus(page, (s) => s === "Done.", { timeoutMs: 60000, label: "the run to finish" });
 
     const [download] = await Promise.all([page.waitForEvent("download"), page.click("#download")]);
     const bytes = new Uint8Array(readFileSync(await download.path()));
@@ -559,7 +575,7 @@ try {
       `${FIXTURE_DIR}${tableFixture.file}`,
     ]);
     await page.click("#run");
-    await page.waitForFunction(() => document.getElementById("status").textContent === "Done.", { timeout: 30000 });
+    await waitForStatus(page, (s) => s === "Done.", { timeoutMs: 30000, label: "the run to finish" });
 
     const fileStatuses = await page.$$eval("#file-list .file-status", (els) => els.map((e) => e.textContent));
     const preview = await page.inputValue("#result");
@@ -617,14 +633,14 @@ try {
       };
     });
     await page.setInputFiles("#file-input", `${FIXTURE_DIR}${pdfFixture.file}`);
-    await page.waitForFunction(() => !document.getElementById("run").disabled, { timeout: 20000 });
+    await waitForRunEnabled(page, { timeoutMs: 20000 });
 
     const statusAfterRender = await page.textContent("#status");
     const namesAfterRender = await page.$$eval("#file-list .file-name", (els) => els.map((e) => e.textContent));
     const runLabel = await page.textContent("#run");
 
     await page.click("#run");
-    await page.waitForFunction(() => document.getElementById("status").textContent === "Done.", { timeout: 30000 });
+    await waitForStatus(page, (s) => s === "Done.", { timeoutMs: 30000, label: "the run to finish" });
     const preview = await page.inputValue("#result");
 
     console.log(`Status after render: ${JSON.stringify(statusAfterRender)}`);
@@ -661,13 +677,13 @@ try {
 
     await page.goto(`${origin}/index.html`, { waitUntil: "load" });
     await page.setInputFiles("#file-input", [`${FIXTURE_DIR}${invoiceFixture.file}`, `${FIXTURE_DIR}${pdfFixture.file}`]);
-    await page.waitForFunction(() => !document.getElementById("run").disabled, { timeout: 20000 });
+    await waitForRunEnabled(page, { timeoutMs: 20000 });
 
     const namesAfterRender = await page.$$eval("#file-list .file-name", (els) => els.map((e) => e.textContent));
     const runLabel = await page.textContent("#run");
 
     await page.click("#run");
-    await page.waitForFunction(() => document.getElementById("status").textContent === "Done.", { timeout: 30000 });
+    await waitForStatus(page, (s) => s === "Done.", { timeoutMs: 30000, label: "the run to finish" });
     const preview = await page.inputValue("#result");
 
     const label = await page.textContent("#download");
@@ -719,7 +735,7 @@ try {
       `${FIXTURE_DIR}${paragraphFixture.file}`,
     ]);
     await page.click("#run");
-    await page.waitForFunction(() => document.getElementById("status").textContent.startsWith("Recognizing"), { timeout: 20000 });
+    await waitForStatus(page, (s) => s.startsWith("Recognizing"), { timeoutMs: 20000, label: "recognition to start" });
     const disabledMidRun = await page.$eval("#file-input", (el) => el.disabled);
 
     // setInputFiles bypasses the native disabled-input block entirely (it
@@ -730,7 +746,7 @@ try {
     await page.waitForTimeout(200);
     const runStillDisabled = await page.$eval("#run", (el) => el.disabled);
 
-    await page.waitForFunction(() => document.getElementById("status").textContent === "Done.", { timeout: 30000 });
+    await waitForStatus(page, (s) => s === "Done.", { timeoutMs: 30000, label: "the run to finish" });
     const names = await page.$$eval("#file-list .file-name", (els) => els.map((e) => e.textContent));
     const result = await page.inputValue("#result");
 
@@ -775,7 +791,7 @@ try {
       btn.click();
       btn.click();
     });
-    await page.waitForFunction(() => document.getElementById("status").textContent === "Done.", { timeout: 30000 });
+    await waitForStatus(page, (s) => s === "Done.", { timeoutMs: 30000, label: "the run to finish" });
 
     console.log(`Tesseract.createWorker call count: ${createWorkerCalls}`);
     if (createWorkerCalls !== 1) {
@@ -797,15 +813,148 @@ try {
     await page.goto(`${origin}/index.html`, { waitUntil: "load" });
     await page.setInputFiles("#file-input", `${FIXTURE_DIR}${invoiceFixture.file}`);
     await page.click("#run");
-    await page.waitForFunction(() => document.getElementById("status").textContent.startsWith("Recognizing"), { timeout: 20000 });
+    await waitForStatus(page, (s) => s.startsWith("Recognizing"), { timeoutMs: 20000, label: "recognition to start" });
     const resultSectionHiddenMidRun = await page.$eval("#result-section", (el) => el.hidden);
-    await page.waitForFunction(() => document.getElementById("status").textContent === "Done.", { timeout: 30000 });
+    await waitForStatus(page, (s) => s === "Done.", { timeoutMs: 30000, label: "the run to finish" });
 
     if (!resultSectionHiddenMidRun) {
       console.error("✗ FAILED: the result/download section was visible during an active run.");
       failed = true;
     } else {
       console.log("✓ Download button is inaccessible (parent section hidden) for the duration of a run.");
+    }
+    await context.close();
+  }
+
+  // --- Mobile viewport & touch emulation: this project has zero
+  // responsive media queries (public/style.css relies entirely on fluid
+  // sizing — clamp(), max-width, percentage padding) and had never
+  // actually been driven with touch input before. Real device profiles
+  // (viewport, user agent, hasTouch, isMobile) via Playwright's bundled
+  // `devices`, not guessed dimensions. `isMobile` is documented as
+  // unsupported on Firefox, so it's stripped from the context options
+  // only on that engine — hasTouch and the narrow viewport itself, the
+  // parts that actually matter for this check, apply on every engine. ---
+  {
+    console.log(`\n=== mobile: layout fits without horizontal overflow ===`);
+    const layoutDevices = [
+      { name: "iPhone SE (320px, narrowest common device)", profile: devices["iPhone SE"] },
+      { name: "Pixel 7 (412px)", profile: devices["Pixel 7"] },
+    ];
+    let allOk = true;
+    for (const { name, profile } of layoutDevices) {
+      const { isMobile, ...withoutIsMobile } = profile;
+      const contextOptions = engineName === "firefox" ? withoutIsMobile : profile;
+      const context = await browser.newContext(contextOptions);
+      const page = await context.newPage();
+      page.on("pageerror", (e) => console.error("[pageerror]", String(e)));
+      await page.goto(`${origin}/index.html`, { waitUntil: "load" });
+
+      const { scrollWidth, viewportWidth } = await page.evaluate(() => ({
+        scrollWidth: document.documentElement.scrollWidth,
+        viewportWidth: window.innerWidth,
+      }));
+      const runBox = await page.$eval("#run", (el) => el.getBoundingClientRect());
+      const pickerBox = await page.$eval(".picker-btn", (el) => el.getBoundingClientRect());
+      const noOverflow = scrollWidth <= viewportWidth;
+      const runVisible = runBox.left >= 0 && runBox.right <= viewportWidth;
+      const pickerVisible = pickerBox.left >= 0 && pickerBox.right <= viewportWidth;
+      const ok = noOverflow && runVisible && pickerVisible;
+      allOk &&= ok;
+      console.log(`  ${name}: scrollWidth=${scrollWidth} viewport=${viewportWidth} (${noOverflow ? "no overflow" : "OVERFLOW"}), Run button in-bounds: ${runVisible}, Choose Files in-bounds: ${pickerVisible} ${ok ? "✓" : "✗"}`);
+      await context.close();
+    }
+    if (!allOk) {
+      console.error("✗ FAILED: layout overflows or clips a key control at a real mobile viewport width.");
+      failed = true;
+    } else {
+      console.log("✓ No horizontal overflow and key controls stay in-bounds at both device widths.");
+    }
+  }
+
+  // --- Mobile: a real end-to-end run driven with touch input (tap(), not
+  // click()) on a real narrow-viewport device profile — confirms the app's
+  // actual controls work under touch, not just mouse. File selection
+  // itself still goes through setInputFiles(): no automation tool can
+  // drive a real OS file-picker dialog regardless of touch/mobile
+  // emulation, on any engine — that's a platform limitation the app's own
+  // code has no way to satisfy either way. What this actually tests is
+  // that a touch tap on Run and Download work at all, on a real narrow
+  // viewport, all the way through a real recognition. ---
+  {
+    console.log(`\n=== mobile: full run driven by touch (tap) on iPhone SE viewport ===`);
+    const invoiceFixture = manifest.find((f) => f.name === "sample-invoice");
+    const profile = devices["iPhone SE"];
+    const { isMobile, ...withoutIsMobile } = profile;
+    const contextOptions = engineName === "firefox" ? withoutIsMobile : profile;
+    const context = await browser.newContext(contextOptions);
+    const page = await context.newPage();
+    page.on("pageerror", (e) => console.error("[pageerror]", String(e)));
+
+    await page.goto(`${origin}/index.html`, { waitUntil: "load" });
+    await page.setInputFiles("#file-input", `${FIXTURE_DIR}${invoiceFixture.file}`);
+    await waitForRunEnabled(page, { timeoutMs: 10000 });
+    await page.tap("#run");
+    await waitForStatus(page, (s) => s === "Done.", { timeoutMs: 30000, label: "the run to finish" });
+
+    const recognized = (await page.inputValue("#result")).trim();
+    const [download] = await Promise.all([page.waitForEvent("download"), page.tap("#download")]);
+    const downloadOk = !!(await download.path());
+
+    const ok = recognized === invoiceFixture.expectedText && downloadOk;
+    console.log(`Recognized via touch-driven run: ${JSON.stringify(recognized)}`);
+    console.log(`Download tapped successfully: ${downloadOk}`);
+    if (!ok) {
+      console.error("✗ FAILED: a touch-driven run on a mobile viewport didn't complete correctly.");
+      failed = true;
+    } else {
+      console.log("✓ Full run (tap Run, tap Download) works correctly on a real mobile viewport with touch input.");
+    }
+    await context.close();
+  }
+
+  // --- Accessibility: a real automated audit (axe-core, via
+  // @axe-core/playwright — the standard tool for this, not a hand-rolled
+  // check), against the real running page in three real states, not just
+  // the empty landing page. Interactive states can introduce issues the
+  // static markup doesn't have — the file list and result panel are both
+  // built dynamically by app.js, so they're exactly the parts a purely
+  // static HTML review would miss. ---
+  {
+    console.log(`\n=== accessibility: automated audit (axe-core) across real UI states ===`);
+    const invoiceFixture = manifest.find((f) => f.name === "sample-invoice");
+    const context = await browser.newContext();
+    const page = await context.newPage();
+    page.on("pageerror", (e) => console.error("[pageerror]", String(e)));
+
+    await page.goto(`${origin}/index.html`, { waitUntil: "load" });
+
+    let allViolations = [];
+    async function auditState(label) {
+      const results = await new AxeBuilder({ page }).analyze();
+      console.log(`  ${label}: ${results.violations.length} violation(s)`);
+      for (const v of results.violations) {
+        console.log(`    ✗ [${v.impact}] ${v.id}: ${v.help} (${v.nodes.length} node(s)) — ${v.helpUrl}`);
+        for (const node of v.nodes) console.log(`        ${node.target.join(" ")}`);
+      }
+      allViolations.push(...results.violations.map((v) => ({ ...v, state: label })));
+    }
+
+    await auditState("initial load (empty state)");
+
+    await page.setInputFiles("#file-input", `${FIXTURE_DIR}${invoiceFixture.file}`);
+    await waitForRunEnabled(page, { timeoutMs: 10000 });
+    await auditState("file selected (file-list populated)");
+
+    await page.click("#run");
+    await waitForStatus(page, (s) => s === "Done.", { timeoutMs: 30000, label: "the run to finish" });
+    await auditState("run complete (result panel visible)");
+
+    if (allViolations.length > 0) {
+      console.error(`✗ FAILED: ${allViolations.length} accessibility violation(s) found across ${new Set(allViolations.map((v) => v.state)).size} state(s) — see details above.`);
+      failed = true;
+    } else {
+      console.log("✓ No accessibility violations found in any of the three states audited.");
     }
     await context.close();
   }

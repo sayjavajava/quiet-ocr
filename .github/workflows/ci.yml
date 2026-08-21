@@ -10,6 +10,10 @@ permissions:
 
 jobs:
   verify:
+    strategy:
+      fail-fast: false
+      matrix:
+        browser: [chromium, firefox, webkit]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -35,10 +39,10 @@ jobs:
         uses: actions/cache@v6
         with:
           path: ~/.cache/ms-playwright
-          key: playwright-chromium-${{ runner.os }}-${{ steps.playwright-version.outputs.version }}
+          key: playwright-${{ matrix.browser }}-${{ runner.os }}-${{ steps.playwright-version.outputs.version }}
 
-      - name: Install Chromium
-        run: npx playwright install --with-deps chromium
+      - name: Install ${{ matrix.browser }}
+        run: npx playwright install --with-deps ${{ matrix.browser }}
 
       # The load-bearing check: loads the real built page in a real
       # browser, uploads a fixture image with known text through the
@@ -46,11 +50,22 @@ jobs:
       # recognizes it and that no network request carries anything
       # derived from the image. A green `npm run build` alone proves
       # nothing about either — this is what actually verifies the
-      # project's two real claims.
-      - name: Verify OCR works and nothing is transmitted
+      # project's two real claims. Runs against chromium, firefox, and
+      # webkit (see the matrix above) — the one real engine-compatibility
+      # gap this project has hit so far (pdf.js calling
+      # Map.prototype.getOrInsertComputed with no fallback — see
+      # docs/PERFORMANCE.md's "PDF input" section) was only found by
+      # actually running against more than one engine, not by code review.
+      - name: Verify OCR works and nothing is transmitted (${{ matrix.browser }})
         run: npm run verify
+        env:
+          BROWSER: ${{ matrix.browser }}
 
-      - uses: actions/upload-pages-artifact@v5
+      # Only one browser's build needs to become the deployed artifact —
+      # they all build the same public/ output.
+      - name: Upload Pages artifact
+        if: matrix.browser == 'chromium'
+        uses: actions/upload-pages-artifact@v5
         with:
           path: public
 
