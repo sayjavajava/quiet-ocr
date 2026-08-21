@@ -61,19 +61,51 @@ export function isPdfFile(file) {
   return file.type === 'application/pdf' || /\.pdf$/i.test(file.name);
 }
 
+// Hard cap on pages rendered from a single PDF — there was previously no
+// limit at all here, and rendering (unlike OCR) starts immediately on
+// file selection with no confirmation gate, so an oversized PDF could
+// already burn minutes of unstoppable main-thread work before the user
+// ever sees LARGE_BATCH_THRESHOLD's confirm() dialog in app.js.
+//
+// Set from a real measured breaking point (scripts/measure-render-scaling.mjs),
+// not guessed: rendering a realistic full-resolution scanned page (A4 @
+// 300dpi, the worst realistic case — most real "large PDF" problems are
+// scanned documents, not vector text) scales linearly at ~320-350ms/page
+// with flat memory (no leak, ~5MB heap growth even at 500-600 pages) —
+// there's no crash or technical ceiling in the tested range, only time.
+// 500 pages rendered successfully in 163s; 600 pages exceeded a 3-minute
+// practical ceiling (chosen because this app has no progress bar beyond
+// the per-page status list and no pause/cancel once a run starts).
+// Combined with real measured OCR cost for degraded/scanned content
+// (~1.7s/page, docs/PERFORMANCE.md's DPI sweep), a 300-page document's
+// worst-case total (render + OCR) is ~10 minutes — already a lot, but a
+// real margin below the 500-page point actually verified safe, and below
+// the 600-page point where pure rendering alone already became
+// impractical.
+export const MAX_PDF_PAGES = 300;
+
 /**
  * Renders every page of `file` to a PNG and returns one File per page, in
  * page order, named `${basename}-page-{n}.png`. A page that fails to
  * render (corrupt content, an unsupported PDF feature) is skipped with its
  * error reported via `onPageError`, rather than aborting the whole
  * document — the same "one bad item doesn't sink the batch" rule the
- * multi-image batch feature already applies to OCR itself.
+ * multi-image batch feature already applies to OCR itself. A PDF with
+ * more than MAX_PDF_PAGES pages is rejected outright, before the
+ * expensive per-page render loop starts.
  */
 export async function pdfToImageFiles(file, { dpi = DEFAULT_RENDER_DPI, onPageError } = {}) {
   const scale = dpi / 72;
   const baseName = file.name.replace(/\.pdf$/i, '');
   const buffer = await file.arrayBuffer();
   const pdf = await pdfjsLib.getDocument({ data: buffer }).promise;
+
+  if (pdf.numPages > MAX_PDF_PAGES) {
+    throw new Error(
+      `This PDF has ${pdf.numPages} pages, over the ${MAX_PDF_PAGES}-page limit for a single ` +
+      `document. Split it into smaller files and try again.`,
+    );
+  }
 
   const files = [];
   for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber++) {

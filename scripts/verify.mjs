@@ -22,6 +22,7 @@
  */
 import { chromium, firefox, webkit, devices } from "playwright";
 import { AxeBuilder } from "@axe-core/playwright";
+import { PDFDocument, StandardFonts, rgb } from "pdf-lib";
 import { readFileSync, existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { unzipSync, strFromU8 } from "fflate";
@@ -57,6 +58,12 @@ const THRESHOLDS = {
   // scripts/measure-pdf-dpi.mjs and docs/PERFORMANCE.md.
   "scanned-multipage": 0.85,
 };
+
+// Must match public/pdf-to-images.js's MAX_PDF_PAGES — not imported
+// directly since that module is browser-only (it references `document`
+// and pdf.js's own browser build at module scope, neither of which exist
+// under Node).
+const MAX_PDF_PAGES = 300;
 
 if (!existsSync(`${PUBLIC_DIR}/vendor/tesseract.min.js`)) {
   console.error("✗ public/vendor/ not found — run `npm run build` first.");
@@ -657,6 +664,74 @@ try {
       failed = true;
     } else {
       console.log("✓ Page 2 failed visibly; pages 1 and 3 still rendered, ran, and recognized correctly.");
+    }
+    await context.close();
+  }
+
+  // --- Hard page-count cap (MAX_PDF_PAGES, public/pdf-to-images.js): set
+  // from a real measured breaking point (scripts/measure-render-scaling.mjs)
+  // rather than guessed — see that constant's own comment for the numbers.
+  // Checks both sides of the boundary: exactly at the cap still renders
+  // (not an off-by-one that rejects a legitimate document), one page over
+  // is rejected outright, before the expensive per-page render loop ever
+  // starts. Cheap vector text pages here, not a full-resolution scan —
+  // this is testing the *count* check itself, not render performance
+  // (which measure-render-scaling.mjs already covers separately). ---
+  {
+    console.log(`\n=== hard page-count cap: exactly at the limit still renders ===`);
+    const pdfDoc = await PDFDocument.create();
+    const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
+    for (let i = 0; i < MAX_PDF_PAGES; i++) {
+      const p = pdfDoc.addPage([200, 100]);
+      p.drawText(`Page ${i + 1}`, { x: 20, y: 50, size: 12, font, color: rgb(0, 0, 0) });
+    }
+    const pdfB64 = Buffer.from(await pdfDoc.save()).toString("base64");
+
+    const context = await browser.newContext();
+    const page = await context.newPage();
+    page.on("pageerror", (e) => console.error("[pageerror]", String(e)));
+    await page.goto(`${origin}/index.html`, { waitUntil: "load" });
+    await selectFilesInBrowser(page, [{ name: "at-cap.pdf", b64: pdfB64, type: "application/pdf" }]);
+    await waitForRunEnabled(page, { timeoutMs: 60000 });
+
+    const status = await page.textContent("#status");
+    const renderedCount = await page.$$eval("#file-list .file-name", (els) => els.length);
+    console.log(`Status: ${JSON.stringify(status)}, rendered: ${renderedCount}/${MAX_PDF_PAGES}`);
+    if (status.startsWith("Error:") || renderedCount !== MAX_PDF_PAGES) {
+      console.error(`✗ FAILED: a PDF at exactly the ${MAX_PDF_PAGES}-page cap was rejected or under-rendered.`);
+      failed = true;
+    } else {
+      console.log(`✓ A PDF at exactly the ${MAX_PDF_PAGES}-page cap rendered every page.`);
+    }
+    await context.close();
+  }
+
+  {
+    console.log(`\n=== hard page-count cap: one page over is rejected outright ===`);
+    const overCount = MAX_PDF_PAGES + 1;
+    const pdfDoc = await PDFDocument.create();
+    const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
+    for (let i = 0; i < overCount; i++) {
+      const p = pdfDoc.addPage([200, 100]);
+      p.drawText(`Page ${i + 1}`, { x: 20, y: 50, size: 12, font, color: rgb(0, 0, 0) });
+    }
+    const pdfB64 = Buffer.from(await pdfDoc.save()).toString("base64");
+
+    const context = await browser.newContext();
+    const page = await context.newPage();
+    page.on("pageerror", (e) => console.error("[pageerror]", String(e)));
+    await page.goto(`${origin}/index.html`, { waitUntil: "load" });
+    await selectFilesInBrowser(page, [{ name: "over-cap.pdf", b64: pdfB64, type: "application/pdf" }]);
+    const status = await waitForStatus(page, (s) => s.includes("Rendered with errors"), { timeoutMs: 60000, label: "the rejection message" });
+    const renderedCount = await page.$$eval("#file-list .file-name", (els) => els.length);
+    console.log(`Status: ${JSON.stringify(status)}, rendered: ${renderedCount}`);
+
+    const ok = status.includes(String(overCount)) && status.includes(String(MAX_PDF_PAGES)) && renderedCount === 0;
+    if (!ok) {
+      console.error(`✗ FAILED: a ${overCount}-page PDF (one over the cap) wasn't rejected with a clear message and zero rendered pages.`);
+      failed = true;
+    } else {
+      console.log(`✓ A ${overCount}-page PDF was rejected outright, before any page rendered, with a clear message.`);
     }
     await context.close();
   }
