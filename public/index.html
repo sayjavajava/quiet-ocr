@@ -30,6 +30,24 @@
       machine.
     </p>
 
+    <div class="language-picker">
+      <label for="language">Document language</label>
+      <select id="language" class="select-control">
+        <option value="eng" selected>English</option>
+        <option value="fra">French</option>
+        <option value="spa">Spanish</option>
+        <option value="deu">German</option>
+        <option value="por">Portuguese</option>
+        <option value="ita">Italian</option>
+        <option value="rus">Russian</option>
+        <option value="ara">Arabic</option>
+        <option value="hin">Hindi</option>
+        <option value="chi_sim">Chinese (Simplified)</option>
+        <option value="jpn">Japanese</option>
+        <option value="kor">Korean</option>
+      </select>
+    </div>
+
     <div class="picker glass">
       <div class="picker-icon" aria-hidden="true">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 16V4M12 4l-4 4M12 4l4 4"/><path d="M4 16v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/></svg>
@@ -60,9 +78,9 @@
         <div class="result-actions">
           <button id="copy" class="btn-ghost">Copy text</button>
           <label for="output-format" class="visually-hidden">Download format</label>
-          <select id="output-format">
+          <select id="output-format" class="select-control">
             <option value="docx" selected>Word document (.docx)</option>
-            <option value="pdf">Searchable PDF (.pdf)</option>
+            <option id="pdf-format-option" value="pdf">Searchable PDF (.pdf)</option>
           </select>
           <button id="download" class="btn-ghost">Download .docx</button>
         </div>

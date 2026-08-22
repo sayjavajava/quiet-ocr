@@ -21,7 +21,43 @@ const resultSection = document.getElementById('result-section');
 const resultEl = document.getElementById('result');
 const copyButton = document.getElementById('copy');
 const outputFormatSelect = document.getElementById('output-format');
+const pdfFormatOption = document.getElementById('pdf-format-option');
 const downloadButton = document.getElementById('download');
+const languageSelect = document.getElementById('language');
+
+// pdf-export.js's invisible text layer uses StandardFonts.Helvetica, which
+// is WinAnsi-encoded (~220 code points — Latin script, including the
+// accented letters French/Spanish/German/Portuguese/Italian actually use).
+// font.encodeText() throws on anything outside that, and pdf-export.js
+// already tolerates that per-word (skips just that one word, so one
+// stray OCR-garbage glyph never aborts the whole document) — but for
+// these six languages, *every* word would fail to encode, silently
+// producing a PDF with the right image and zero actual invisible text: a
+// real, silent degradation, not the rare edge case the per-word guard was
+// built for. Disabling the option outright for these languages is honest
+// about that, rather than shipping a "searchable" PDF that isn't
+// searchable. .docx (always fully Unicode, via the `docx` library) is
+// unaffected and stays available for every supported language.
+const NON_LATIN_LANGS = new Set(['rus', 'ara', 'hin', 'chi_sim', 'jpn', 'kor']);
+
+function updateOutputFormatAvailability() {
+  const unavailable = NON_LATIN_LANGS.has(languageSelect.value);
+  pdfFormatOption.disabled = unavailable;
+  pdfFormatOption.textContent = unavailable
+    ? 'Searchable PDF (.pdf) — not available for this language'
+    : 'Searchable PDF (.pdf)';
+  if (unavailable && outputFormatSelect.value === 'pdf') {
+    outputFormatSelect.value = 'docx';
+    updateDownloadButtonLabel();
+  }
+}
+languageSelect.addEventListener('change', updateOutputFormatAvailability);
+// Run once at load, not just on future change events — a browser can
+// restore a <select>'s value from history/back-forward cache on reload
+// even without any JS running, which could otherwise leave a non-Latin
+// language selected while the PDF option's static HTML (enabled) is what
+// actually renders.
+updateOutputFormatAvailability();
 
 let selectedFiles = [];
 // One entry per originally-selected file (not per rendered PDF page):
@@ -323,8 +359,13 @@ runButton.addEventListener('click', async () => {
   // A new selection mid-run would reassign selectedFiles/fileGroups out
   // from under the loop below — silently truncating it, and pairing the
   // wrong file's recognized text with the wrong filename in the .docx
-  // export.
+  // export. languageSelect is locked the same way for the same reason:
+  // changing it mid-run wouldn't affect the already-created worker below
+  // (recognize() uses whatever language the worker was created with, not
+  // whatever the control currently shows), so leaving it interactive would
+  // just be misleading about what's actually running.
   fileInput.disabled = true;
+  languageSelect.disabled = true;
   resultSection.hidden = true;
   statusEl.textContent = 'Loading OCR engine…';
 
@@ -346,7 +387,7 @@ runButton.addEventListener('click', async () => {
     // worker has a real, measured fixed cost (~500ms, see
     // docs/PERFORMANCE.md) independent of image content, so reusing it
     // across a batch avoids paying that cost once per image.
-    worker = await Tesseract.createWorker('eng', 1 /* OEM_LSTM_ONLY */, {
+    worker = await Tesseract.createWorker(languageSelect.value, 1 /* OEM_LSTM_ONLY */, {
       corePath: 'vendor/tesseract-core-lstm.wasm.js',
       workerPath: 'vendor/worker.min.js',
       langPath: 'vendor',
@@ -477,6 +518,7 @@ runButton.addEventListener('click', async () => {
     }
     isRunning = false;
     fileInput.disabled = false;
+    languageSelect.disabled = false;
     runButton.disabled = false;
     setCancelVisible(false);
   }

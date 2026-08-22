@@ -32,6 +32,31 @@ const FILES = [
   ["tesseract.js/dist/tesseract.min.js", "tesseract.min.js"],
   ["tesseract.js-core/tesseract-core-lstm.wasm.js", "tesseract-core-lstm.wasm.js"],
   ["@tesseract.js-data/eng/4.0.0_best_int/eng.traineddata.gz", "eng.traineddata.gz"],
+  // Multi-language OCR: each language's trained data is only ever fetched
+  // by the browser when that language is actually selected (tesseract.js
+  // requests exactly `${langPath}/${lang}.traineddata.gz` for whichever
+  // language(s) it's given — confirmed directly from
+  // node_modules/tesseract.js/src/worker-script/index.js), so vendoring
+  // this whole list costs nothing extra for anyone who only ever uses
+  // English. Same 4.0.0_best_int (LSTM-only) variant as eng above, for
+  // every language — confirmed each package actually ships it before
+  // relying on that, not assumed from eng alone. Chosen for real-world
+  // coverage (the world's most-spoken languages) and because every one of
+  // these was directly verified (real recognize() calls against real
+  // rendered sentences, before this list was finalized) to both render
+  // correctly and recognize accurately in this project's own environment
+  // — see test/fixtures/manifest.json's per-language fixtures.
+  ["@tesseract.js-data/fra/4.0.0_best_int/fra.traineddata.gz", "fra.traineddata.gz"],
+  ["@tesseract.js-data/spa/4.0.0_best_int/spa.traineddata.gz", "spa.traineddata.gz"],
+  ["@tesseract.js-data/deu/4.0.0_best_int/deu.traineddata.gz", "deu.traineddata.gz"],
+  ["@tesseract.js-data/por/4.0.0_best_int/por.traineddata.gz", "por.traineddata.gz"],
+  ["@tesseract.js-data/ita/4.0.0_best_int/ita.traineddata.gz", "ita.traineddata.gz"],
+  ["@tesseract.js-data/rus/4.0.0_best_int/rus.traineddata.gz", "rus.traineddata.gz"],
+  ["@tesseract.js-data/ara/4.0.0_best_int/ara.traineddata.gz", "ara.traineddata.gz"],
+  ["@tesseract.js-data/hin/4.0.0_best_int/hin.traineddata.gz", "hin.traineddata.gz"],
+  ["@tesseract.js-data/chi_sim/4.0.0_best_int/chi_sim.traineddata.gz", "chi_sim.traineddata.gz"],
+  ["@tesseract.js-data/jpn/4.0.0_best_int/jpn.traineddata.gz", "jpn.traineddata.gz"],
+  ["@tesseract.js-data/kor/4.0.0_best_int/kor.traineddata.gz", "kor.traineddata.gz"],
   // PDF input (F-3): rasterizes each page to an image before handing it to
   // the same OCR pipeline images already use. Non-legacy build — this page
   // is only ever served over http(s), not file://, so none of the
@@ -81,9 +106,17 @@ for (const [src, destName] of FILES) {
 // UI type: Space Grotesk (display) + Inter (body), self-hosted for the same
 // reason as everything else here — one fewer third party, a pinned version,
 // no dependency on a font CDN's uptime. Only the latin + latin-ext subsets
-// are copied (this app is English-only, per README's "Scope, for now") —
-// each @fontsource-variable package ships a dozen+ script subsets (cyrillic,
-// greek, vietnamese, …) that this app has no use for.
+// are copied — this is the site's own chrome font (buttons, labels, the
+// page's own English/Latin-script copy), not what renders recognized text:
+// the result <textarea> (style.css, textarea#result) uses --font-mono,
+// which is `ui-monospace, 'SF Mono', 'Cascadia Mono', monospace` — generic/
+// system font keywords, no @font-face of this project's own — so it already
+// relies on the browser/OS's own font substitution for glyphs those don't
+// cover, the same fallback mechanism confirmed (real screenshot, not
+// assumed) to render Cyrillic/Arabic/Devanagari/CJK correctly during this
+// feature's own research. Each @fontsource-variable package ships a dozen+
+// additional script subsets (cyrillic, greek, vietnamese, …) this app's own
+// UI chrome has no use for.
 const FONT_DIR = join(OUT_DIR, "fonts");
 mkdirSync(FONT_DIR, { recursive: true });
 

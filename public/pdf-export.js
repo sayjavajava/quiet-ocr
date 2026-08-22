@@ -99,12 +99,18 @@ function drawInvisibleWords(page, font, fontKey, words, pageHeightPt) {
 
     // StandardFonts.Helvetica uses WinAnsi encoding (~220 code points) —
     // encodeText()/widthOfTextAtSize() throw synchronously on anything
-    // outside it (CJK, Cyrillic, stray OCR-garbage glyphs on a noisy
-    // scan). This app is English-only (see README's "Scope, for now"),
-    // but a misread character on a real scan is exactly the kind of thing
-    // that can still slip outside WinAnsi — skip only this one word's
-    // invisible run rather than letting it abort the whole document, the
-    // same per-item tolerance used throughout this codebase.
+    // outside it (CJK, Cyrillic, Arabic, Devanagari, stray OCR-garbage
+    // glyphs on a noisy scan). This per-word try/catch handles the rare
+    // case (a misread character slipping outside WinAnsi on an otherwise
+    // WinAnsi-compatible language) by skipping just that one word's
+    // invisible run — the same per-item tolerance used throughout this
+    // codebase. It is NOT what protects against the *common* case: a
+    // language whose script is entirely outside WinAnsi (Russian, Arabic,
+    // Hindi, Chinese, Japanese, Korean), where every word would fail here.
+    // That's handled one layer up, in app.js's updateOutputFormatAvailability()
+    // — the Searchable PDF format option is disabled outright for those
+    // languages, so buildSearchablePdfBlob() is never even called with
+    // words in an incompatible script to begin with.
     let encoded, naturalWidth;
     try {
       encoded = font.encodeText(word.text);
