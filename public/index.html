@@ -59,6 +59,11 @@
         <textarea id="result" readonly rows="10" aria-labelledby="result-label"></textarea>
         <div class="result-actions">
           <button id="copy" class="btn-ghost">Copy text</button>
+          <label for="output-format" class="visually-hidden">Download format</label>
+          <select id="output-format">
+            <option value="docx" selected>Word document (.docx)</option>
+            <option value="pdf">Searchable PDF (.pdf)</option>
+          </select>
           <button id="download" class="btn-ghost">Download .docx</button>
         </div>
       </div>

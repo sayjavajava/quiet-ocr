@@ -4,7 +4,9 @@
  * fixes to how a .docx is parsed or how files are selected in the browser
  * don't need to be repeated in every script that needs them.
  */
+import { inflateSync } from "node:zlib";
 import { unzipSync, strFromU8 } from "fflate";
+import * as pdfjsLib from "pdfjs-dist/legacy/build/pdf.mjs";
 
 /** A .docx is itself a zip; pull its main body XML and strip tags to check content. */
 export function readDocxText(docxBytes) {
@@ -29,6 +31,64 @@ export function readDocxPages(docxBytes) {
     pages[pages.length - 1].push(text);
   }
   return pages.map((lines) => lines.join("\n"));
+}
+
+/**
+ * Reads a generated searchable-PDF's real text content back per page, the
+ * same way a real PDF viewer's "select all"/search would see it — proof
+ * the invisible OCR text layer (public/pdf-export.js) actually exists and
+ * is extractable, not just that a PDF-shaped file was produced. Runs
+ * directly in Node against downloaded bytes (pdfjs-dist's own
+ * Node-compatible legacy build — distinct from the browser build already
+ * vendored as public/vendor/pdf.min.mjs for the app itself), the same way
+ * readDocxText/readDocxPages above never need the Playwright browser
+ * context either. `verbosity: 0` silences a benign
+ * "standardFontDataUrl not provided" warning this build otherwise logs on
+ * every call — it doesn't affect text extraction, only glyph rendering,
+ * which this helper never does.
+ */
+export async function readPdfPagesText(pdfBytes) {
+  const doc = await pdfjsLib.getDocument({ data: new Uint8Array(pdfBytes), verbosity: 0 }).promise;
+  const pages = [];
+  for (let i = 1; i <= doc.numPages; i++) {
+    const content = await (await doc.getPage(i)).getTextContent();
+    pages.push(content.items.map((item) => item.str).join(" "));
+  }
+  return pages;
+}
+
+/**
+ * Regression coverage against pdf-export.js's invisible text ever sliding
+ * to a `drawText({opacity: 0})` alpha-fade instead — not the same thing to
+ * some PDF viewers/search indexes as the real "neither fill nor stroke"
+ * text-rendering mode. Confirmed empirically (not assumed) that pdf-lib
+ * Flate-compresses content streams by default: the literal `3 Tr` operator
+ * pdf-lib emits for TextRenderingMode.Invisible is never found in a
+ * generated PDF's raw bytes, only after inflating each `stream`/`endstream`
+ * block — a plain non-decompressing `bytes.includes('3 Tr')` would always
+ * report false regardless of whether the real invisible-text operator is
+ * actually there, so this must decompress first or it isn't testing
+ * anything.
+ */
+export function pdfHasInvisibleTextOperator(pdfBytes) {
+  const buf = Buffer.isBuffer(pdfBytes) ? pdfBytes : Buffer.from(pdfBytes);
+  const raw = buf.toString("latin1");
+  const streamRe = /stream\r?\n/g;
+  let match;
+  while ((match = streamRe.exec(raw))) {
+    const start = match.index + match[0].length;
+    const end = raw.indexOf("endstream", start);
+    if (end === -1) continue;
+    try {
+      if (inflateSync(buf.subarray(start, end)).toString("latin1").includes("3 Tr")) return true;
+    } catch {
+      // Not every stream in the file is Flate-compressed content (some are
+      // uncompressed, some are a different filter entirely, e.g. the
+      // embedded image's own DCTDecode/FlateDecode-PNG-predictor data) —
+      // inflateSync failing on one of those is expected, not an error.
+    }
+  }
+  return false;
 }
 
 /**

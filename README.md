@@ -85,13 +85,17 @@ numbers this is based on, including a real browser-compatibility issue found and
 building PDF support (a very recent JS engine method pdf.js depends on that not all current
 browsers have yet).
 
-**Output is a real Word document, not a text dump.** Each image or PDF becomes its own `.docx`
-(a multi-page PDF becomes one `.docx` with a real page break between each page's text, not a
-wall of text); select more than one file and you get a single `.zip` of all the generated `.docx`
-files. Both are built and packaged entirely client-side (self-hosted
-[`docx`](https://github.com/dolanmiu/docx) and [`fflate`](https://github.com/101arrowz/fflate)) —
-nothing is uploaded to generate them. The on-screen text preview and "Copy text" are still there
-for quickly grabbing a snippet without downloading anything.
+**Output is a real Word document — or a real searchable PDF, your choice.** By default each image
+or PDF becomes its own `.docx` (a multi-page PDF becomes one `.docx` with a real page break
+between each page's text, not a wall of text); select more than one file and you get a single
+`.zip` of all the generated files. Switch the format to **Searchable PDF** and you get your
+original page image back, pixel-for-pixel unchanged, with a real invisible text layer underneath
+it instead — select, search, and copy text right over the visible scan in any PDF viewer, the
+same "sandwich PDF" technique tools like OCRmyPDF use. Both formats are built and packaged
+entirely client-side (self-hosted [`docx`](https://github.com/dolanmiu/docx),
+[`pdf-lib`](https://github.com/Hopding/pdf-lib), and [`fflate`](https://github.com/101arrowz/fflate))
+— nothing is uploaded to generate them. The on-screen text preview and "Copy text" are still
+there for quickly grabbing a snippet without downloading anything.
 
 ## Performance
 

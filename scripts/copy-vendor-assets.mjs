@@ -51,6 +51,19 @@ const FILES = [
   // than one image/PDF was selected — fflate's browser build is also a
   // single dependency-free ES module.
   ["fflate/esm/browser.js", "fflate.mjs"],
+  // Searchable-PDF export: recognized text can also be handed back as the
+  // original page image with an invisible OCR text layer underneath (a
+  // "sandwich PDF"), not just a .docx — see public/pdf-export.js. `dist/
+  // pdf-lib.esm.min.js` is pdf-lib's real prebuilt browser bundle (zero
+  // `import` statements, pako/@pdf-lib/upng/@pdf-lib/standard-fonts already
+  // inlined), confirmed directly before vendoring it — NOT `es/index.js`,
+  // which despite being pdf-lib's package.json "module" entry is actually
+  // bare `export * from "./api/index"` re-exports across many
+  // relative-import source files, not a bundle, and would break once
+  // copied out of node_modules. pdf-lib stays a devDependency in
+  // package.json (like every other browser-facing library here) — nothing
+  // in this project runs on a Node server at request time.
+  ["pdf-lib/dist/pdf-lib.esm.min.js", "pdf-lib.mjs"],
 ];
 
 mkdirSync(OUT_DIR, { recursive: true });
