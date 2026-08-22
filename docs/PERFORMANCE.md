@@ -240,3 +240,52 @@ confirms it takes effect within a tight bound rather than only at full-batch com
 evidence the main thread stays responsive enough for genuine input during a render, not just an
 assumption. Recognize() itself was never on the main thread to begin with, either — see the
 correction above; it always ran inside the Tesseract Worker.
+
+## Multi-language OCR accuracy under degraded conditions
+
+When multi-language OCR shipped (#23), every supported language got a real accuracy check —
+but only against clean, single-line, high-contrast text, the same lighter bar `sample-invoice`
+alone was before `paragraph`/`table`/`noisy-scan` gave English real degraded-condition coverage.
+Every language now gets that same bar: a multi-line paragraph, clean and once degraded through
+the exact same recipe as `noisy-scan` (6° rotation, ±85 per-pixel noise, 1.1px blur, seeded —
+`scripts/generate-test-fixture.mjs`'s `renderDegradedLines`), measured for real
+(`scripts/measure-fixture-accuracy.mjs`), not guessed:
+
+| Language | Clean paragraph | Degraded (noisy-scan recipe) |
+| --- | --: | --: |
+| English (existing) | 100%¹ | 92.5% |
+| French | 100% | 94.7% |
+| Spanish | 100% | 97.3% |
+| German | 100% | 100% |
+| Portuguese | 100% | 81.3% |
+| Italian | 97.1% | 94.1% |
+| Russian | 100% | 77.8% |
+| Arabic | 100% | 89.7% |
+| Hindi | 84.4% | 53.1% |
+| Chinese (Simplified) | 100%² | 63.6% |
+| Japanese | 98.3%² | 39.0% |
+| Korean | 100% | 52.4% |
+
+¹ English's own `paragraph.png`, from the original fixture set.
+² Word-accuracy scored against Tesseract's own real segmentation (spaces inserted between
+individual CJK characters/words the source text doesn't have — see the `sample-chinese`/
+`sample-japanese` fixture comment), not the space-free source string.
+
+**A real methodology bug was caught before any of these numbers were trusted, not after.** The
+first pass rendered per-language paragraphs at 22px (a smaller font, chosen to fit a narrower
+canvas) against the exact same absolute noise amplitude and blur radius tuned for English's 24px
+`noisy-scan`. That produced implausible results — French at 5.3%, Spanish at 0.0% — that looked
+like a genuine language weakness but were actually a font-size artifact: smaller text is
+inherently more vulnerable to the same fixed-strength noise, so the comparison wasn't fair to
+begin with. Re-rendered at 24px, matching English exactly (canvas widened instead, since that
+doesn't affect the noise-to-signal ratio), before any number above was set as a real threshold.
+
+**Real, not-yet-fully-explained per-language variance remains even after that fix** — Portuguese,
+Russian, Hindi, and the three CJK languages degrade noticeably more than French/Spanish/German/
+Italian/Arabic under the identical recipe. Plausible contributing factors (untested, not
+confirmed): script-specific vulnerability to blur/noise (dense CJK glyphs, Devanagari's
+character-joining ligatures), or simply that this project's synthetic sans-serif rendering isn't
+equally representative of each script's typical real-world printed appearance. Real thresholds
+(`THRESHOLDS` in `scripts/verify.mjs`) are set from these actual measured numbers with a margin,
+same convention as every other fixture — not raised or lowered to match an assumption about which
+languages "should" perform well.

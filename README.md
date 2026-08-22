@@ -70,12 +70,16 @@ Italian, Russian, Arabic, Hindi, Chinese (Simplified), Japanese, and Korean, pic
 language selector before you run OCR. Not simultaneous multi-language recognition (a document
 mixing, say, English and French in one run) — that's a real Tesseract capability this app doesn't
 expose yet. Every language listed was verified before being added, not just wired up and assumed
-to work: real font rendering checked (no missing-glyph boxes) and real recognition accuracy
-measured against real sentences in that language — see
+to work: real font rendering checked (no missing-glyph boxes), real recognition accuracy measured
+against clean text, and — since a real scan is rarely clean — real accuracy measured again under
+the same degraded conditions (rotated, noisy, blurred) English's own test fixtures already use,
+per language, not just for English. See
 [`test/fixtures/manifest.json`](test/fixtures/manifest.json)'s per-language fixtures and
-[`docs/PERFORMANCE.md`](docs/PERFORMANCE.md) for the numbers. Each language's trained-data file
-(0.7–3MB) is only ever fetched when you actually select that language — choosing English costs
-nothing extra for the other eleven sitting unused in `/vendor/`.
+[`docs/PERFORMANCE.md`](docs/PERFORMANCE.md)'s "Multi-language OCR accuracy under degraded
+conditions" section for the real numbers — accuracy under degradation varies meaningfully by
+language (77–100%), documented plainly rather than smoothed over. Each language's trained-data
+file (0.7–3MB) is only ever fetched when you actually select that language — choosing English
+costs nothing extra for the other eleven sitting unused in `/vendor/`.
 
 Input is images (PNG/JPEG/WebP/BMP) and PDFs — a selected PDF is rasterized into
 one page-image per page (client-side, via a self-hosted `pdfjs-dist`) before those images go

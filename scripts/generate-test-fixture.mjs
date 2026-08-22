@@ -35,6 +35,64 @@ async function toPng() {
   return Buffer.from(dataUrl.split(',')[1], 'base64');
 }
 
+// Degrades `lines` the way a real phone photo or scan actually looks —
+// rotated, lower contrast, per-pixel noise, slight blur — not just clean
+// canvas-rendered text, which isn't representative of what this tool
+// actually encounters in practice. Extracted from the original English
+// noisy-scan fixture so every language gets the exact same, already-tuned
+// recipe (rotation angle, noise amplitude, blur radius) applied
+// identically — a fair, consistent basis for comparing real per-language
+// degraded accuracy, not a re-tuned-per-language moving target.
+//
+// The noise uses a seeded PRNG (mulberry32), not Math.random(): an
+// unseeded first attempt at tuning this (for the original English
+// fixture) produced a genuinely non-monotonic, unreproducible
+// relationship between noise amplitude and measured accuracy (97.5% ->
+// 100% -> 22.5% as amplitude increased) purely because every
+// regeneration drew a different random pattern — not because of the
+// amplitude changes being tested. A fixed seed makes every fixture
+// bit-for-bit reproducible, which is what makes measuring real accuracy
+// against it meaningful at all.
+async function renderDegradedLines(lines, { width, height, seed, fontSize = 24, startX = 50, startY = 70, lineHeight = 38 }) {
+  await page.setContent(`<canvas id="c" width="${width}" height="${height}"></canvas>`);
+  await page.evaluate(({ lines, seed, w, h, fontSize, startX, startY, lineHeight }) => {
+    const canvas = document.getElementById('c');
+    const ctx = canvas.getContext('2d');
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, w, h);
+
+    let state = seed;
+    function rand() {
+      state |= 0; state = (state + 0x6d2b79f5) | 0;
+      let t = Math.imul(state ^ (state >>> 15), 1 | state);
+      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    }
+
+    ctx.save();
+    ctx.translate(w / 2, h / 2);
+    ctx.rotate((-6 * Math.PI) / 180);
+    ctx.translate(-w / 2, -h / 2);
+    ctx.fillStyle = '#3a3a3a'; // mid-grey on white — materially lower contrast
+    ctx.font = `${fontSize}px sans-serif`;
+    lines.forEach((line, i) => ctx.fillText(line, startX, startY + i * lineHeight));
+    ctx.restore();
+
+    const imageData = ctx.getImageData(0, 0, w, h);
+    const d = imageData.data;
+    for (let i = 0; i < d.length; i += 4) {
+      const noise = (rand() - 0.5) * 85;
+      d[i] = Math.min(255, Math.max(0, d[i] + noise));
+      d[i + 1] = Math.min(255, Math.max(0, d[i + 1] + noise));
+      d[i + 2] = Math.min(255, Math.max(0, d[i + 2] + noise));
+    }
+    ctx.putImageData(imageData, 0, 0);
+    ctx.filter = 'blur(1.1px)';
+    ctx.drawImage(canvas, 0, 0);
+  }, { lines, seed, w: width, h: height, fontSize, startX, startY, lineHeight });
+  return toPng();
+}
+
 // --- sample-invoice: the original single-line, high-contrast fixture ---
 const INVOICE_TEXT = "Invoice number 88214, total due $942.50";
 await page.setContent('<canvas id="c" width="700" height="150"></canvas>');
@@ -91,6 +149,117 @@ for (const [lang, name, text] of LANGUAGE_FIXTURES) {
   languageFixtureText[name] = text;
 }
 
+// --- per-language degraded-accuracy fixtures: the gap explicitly flagged
+// when multi-language OCR shipped (#23) — the eleven LANGUAGE_FIXTURES
+// above only ever proved clean, single-line, high-contrast text works per
+// language, the same lighter bar sample-invoice alone was before
+// paragraph/table/noisy-scan gave English real degraded-condition
+// coverage. Every supported language now gets that same real bar: a
+// multi-line paragraph, clean and once degraded through the exact
+// renderDegradedLines() recipe already tuned for English (same rotation,
+// noise amplitude, blur, seed) — not a lighter or re-tuned-per-language
+// version of it, so results are genuinely comparable across languages.
+//
+// Canvas is wider (1100px) and the font a touch smaller (22px) than
+// English's own paragraph/noisy-scan fixtures (900-950px, 24px) — checked
+// directly against a real render for the widest scripts here (Chinese,
+// Japanese, German's longer compound words) before finalizing, not
+// assumed to fit from the single-line fixtures' width alone. ---
+const LANGUAGE_PARAGRAPHS = {
+  fra: [
+    "Le rapport trimestriel montre une augmentation constante du chiffre",
+    "d'affaires dans toutes les régions. Les scores de satisfaction client",
+    "se sont améliorés de 12% par rapport à la période précédente, tandis",
+    "que les coûts opérationnels sont restés stables.",
+  ],
+  spa: [
+    "El informe trimestral muestra un aumento constante de los ingresos",
+    "en todas las regiones. Las puntuaciones de satisfacción del cliente",
+    "mejoraron un 12% en comparación con el período anterior, mientras",
+    "que los costos operativos se mantuvieron estables.",
+  ],
+  deu: [
+    "Der Quartalsbericht zeigt einen stetigen Anstieg des Umsatzes in",
+    "allen Regionen. Die Kundenzufriedenheit verbesserte sich um 12",
+    "Prozent im Vergleich zum Vorquartal, während die Betriebskosten",
+    "stabil blieben.",
+  ],
+  por: [
+    "O relatório trimestral mostra um aumento constante da receita em",
+    "todas as regiões. Os índices de satisfação do cliente melhoraram",
+    "12% em relação ao período anterior, enquanto os custos operacionais",
+    "permaneceram estáveis.",
+  ],
+  ita: [
+    "Il rapporto trimestrale mostra un aumento costante dei ricavi in",
+    "tutte le regioni. I punteggi di soddisfazione dei clienti sono",
+    "migliorati del 12% rispetto al periodo precedente, mentre i costi",
+    "operativi sono rimasti stabili.",
+  ],
+  rus: [
+    "Квартальный отчет показывает устойчивый рост выручки во всех",
+    "регионах. Показатели удовлетворенности клиентов выросли на 12",
+    "процентов по сравнению с предыдущим периодом, при этом операционные",
+    "расходы остались стабильными.",
+  ],
+  ara: [
+    "يظهر التقرير الفصلي زيادة مطردة في الإيرادات في جميع المناطق",
+    "تحسنت درجات رضا العملاء بنسبة 12 بالمئة مقارنة بالفترة السابقة",
+    "بينما ظلت التكاليف التشغيلية مستقرة خلال هذه الفترة الزمنية",
+  ],
+  hin: [
+    "तिमाही रिपोर्ट में सभी क्षेत्रों में राजस्व में स्थिर वृद्धि",
+    "दिखाई गई है। ग्राहक संतुष्टि स्कोर में पिछली अवधि की तुलना में",
+    "12 प्रतिशत का सुधार हुआ, जबकि परिचालन लागत स्थिर रही।",
+  ],
+  chi_sim: [
+    "季度报告显示各地区收入稳步增长。客户满意度评分较上期提高了",
+    "百分之十二，而运营成本保持稳定。",
+  ],
+  jpn: [
+    "四半期報告書はすべての地域で収益が着実に増加していることを",
+    "示しています。顧客満足度スコアは前期と比較して12パーセント",
+    "向上し、運営コストは安定していました。",
+  ],
+  kor: [
+    "분기 보고서는 모든 지역에서 매출이 꾸준히 증가하고 있음을",
+    "보여줍니다. 고객 만족도 점수는 이전 기간과 비교하여 12퍼센트",
+    "향상되었으며, 운영 비용은 안정적으로 유지되었습니다.",
+  ],
+};
+const LANGUAGE_PARAGRAPH_SEED = 20260822;
+const languageParagraphText = {};
+for (const [lang, lines] of Object.entries(LANGUAGE_PARAGRAPHS)) {
+  const cleanName = `paragraph-${lang}`;
+  const noisyName = `noisy-${lang}`;
+
+  // Same font size (24px) and line metrics as English's own paragraph/
+  // noisy-scan fixtures — a smaller font here would make this language's
+  // text more vulnerable to the exact same absolute noise amplitude/blur
+  // radius than English's baseline, which would test "smaller text under
+  // fixed-strength noise," not "the same degradation applied fairly
+  // across languages." Canvas is wider (1300px) purely to prevent
+  // clipping for longer lines in some scripts — checked visually against
+  // a real render before finalizing, not assumed to fit.
+  await page.setContent('<canvas id="c" width="1300" height="280"></canvas>');
+  await page.evaluate((lines) => {
+    const ctx = document.getElementById('c').getContext('2d');
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, 1300, 280);
+    ctx.fillStyle = '#000000';
+    ctx.font = '24px sans-serif';
+    lines.forEach((line, i) => ctx.fillText(line, 50, 70 + i * 38));
+  }, lines);
+  writeFileSync(`${FIXTURE_DIR}${cleanName}.png`, await toPng());
+
+  const noisyPng = await renderDegradedLines(lines, {
+    width: 1300, height: 280, seed: LANGUAGE_PARAGRAPH_SEED,
+  });
+  writeFileSync(`${FIXTURE_DIR}${noisyName}.png`, noisyPng);
+
+  languageParagraphText[lang] = lines.join(lang === 'chi_sim' || lang === 'jpn' ? '' : ' ');
+}
+
 // --- corrupt-image: a genuinely truncated real PNG (the realistic "an
 // upload/download got cut off partway" case), not a synthetic 0-byte file
 // or random bytes — confirmed by hand against the real pipeline that this
@@ -138,61 +307,11 @@ await page.evaluate((lines) => {
 writeFileSync(`${FIXTURE_DIR}table.png`, await toPng());
 
 // --- noisy-scan: the paragraph again, degraded like a real phone photo —
-// rotated, lower contrast, per-pixel noise, slight blur. Clean
-// canvas-rendered text is not representative of what this tool actually
-// encounters in practice.
-//
-// The noise uses a seeded PRNG (mulberry32), not Math.random(): an
-// unseeded first attempt at tuning this produced a genuinely
-// non-monotonic, unreproducible relationship between the noise amplitude
-// and measured accuracy (97.5% -> 100% -> 22.5% as amplitude increased)
-// purely because every regeneration drew a different random pattern —
-// not because of the amplitude changes being tested. A fixed seed makes
-// the fixture bit-for-bit reproducible, which is what makes tuning
-// against real measurements meaningful at all. ---
+// see renderDegradedLines above for the recipe and why it's seeded. Tuned
+// by real measurement (scripts/measure-fixture-accuracy.mjs) against this
+// seeded, reproducible noise — not guessed. ---
 const NOISE_SEED = 20260820;
-await page.setContent('<canvas id="c" width="950" height="320"></canvas>');
-await page.evaluate(({ lines, seed }) => {
-  const canvas = document.getElementById('c');
-  const ctx = canvas.getContext('2d');
-  const w = 950, h = 320;
-  ctx.fillStyle = '#ffffff';
-  ctx.fillRect(0, 0, w, h);
-
-  // mulberry32 — small, fast, deterministic given the same seed.
-  let state = seed;
-  function rand() {
-    state |= 0; state = (state + 0x6d2b79f5) | 0;
-    let t = Math.imul(state ^ (state >>> 15), 1 | state);
-    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  }
-
-  // Tuned by real measurement (scripts/measure-fixture-accuracy.mjs) against
-  // this seeded, reproducible noise — not guessed, and not re-tuned against
-  // a moving target the way the unseeded version was.
-  ctx.save();
-  ctx.translate(w / 2, h / 2);
-  ctx.rotate((-6 * Math.PI) / 180);
-  ctx.translate(-w / 2, -h / 2);
-  ctx.fillStyle = '#3a3a3a'; // mid-grey on white — materially lower contrast
-  ctx.font = '24px sans-serif';
-  lines.forEach((line, i) => ctx.fillText(line, 50, 70 + i * 38));
-  ctx.restore();
-
-  const imageData = ctx.getImageData(0, 0, w, h);
-  const d = imageData.data;
-  for (let i = 0; i < d.length; i += 4) {
-    const noise = (rand() - 0.5) * 85;
-    d[i] = Math.min(255, Math.max(0, d[i] + noise));
-    d[i + 1] = Math.min(255, Math.max(0, d[i + 1] + noise));
-    d[i + 2] = Math.min(255, Math.max(0, d[i + 2] + noise));
-  }
-  ctx.putImageData(imageData, 0, 0);
-  ctx.filter = 'blur(1.1px)';
-  ctx.drawImage(canvas, 0, 0);
-}, { lines: PARAGRAPH_LINES, seed: NOISE_SEED });
-const noisyScanPng = await toPng();
+const noisyScanPng = await renderDegradedLines(PARAGRAPH_LINES, { width: 950, height: 320, seed: NOISE_SEED });
 writeFileSync(`${FIXTURE_DIR}noisy-scan.png`, noisyScanPng);
 
 // --- sample-multipage: a real PDF (not an image saved as .pdf), to exercise
@@ -283,6 +402,37 @@ const manifest = [
   { name: "sample-chinese", file: "sample-chinese.png", lang: "chi_sim", expectedText: "季度 报告 显示 各 地 区 收入 稳步 增长", mode: "word-accuracy" },
   { name: "sample-japanese", file: "sample-japanese.png", lang: "jpn", expectedText: "四半 期 報 告 書 は 着実 な 増加 を 示し て いま す", mode: "word-accuracy" },
   { name: "sample-korean", file: "sample-korean.png", lang: "kor", expectedText: languageFixtureText["sample-korean"], mode: "exact" },
+  // Per-language degraded-accuracy fixtures (see LANGUAGE_PARAGRAPHS above)
+  // — real multi-line paragraphs, clean and noisy-scan-degraded (same
+  // recipe as English's own noisy-scan, same font size, only the canvas
+  // is wider to avoid clipping — see renderDegradedLines' call above),
+  // giving every supported language the same bar English's own
+  // paragraph/noisy-scan fixtures already set, not just the single-line
+  // exact-match check above. Thresholds are set separately in
+  // scripts/verify.mjs's THRESHOLDS, from real measured numbers (this
+  // script's own convention, see file header) — not guessed.
+  //
+  // chi_sim/jpn expectedText is NOT the plain source string (see the
+  // sample-chinese/sample-japanese comment above for why — Tesseract
+  // inserts spaces between individual characters); it's the CLEAN
+  // fixture's own real recognized output, used as ground truth precisely
+  // because it was independently confirmed 100% content-correct against
+  // the source text (word-by-word) — except jpn's clean recognize()
+  // misread one character (顧 "customer" as 願, a real, visually similar
+  // character it confused), corrected here rather than baked in as
+  // "expected", since expectedText is meant to represent true content,
+  // not "whatever Tesseract happened to output."
+  ...Object.entries(LANGUAGE_PARAGRAPHS).flatMap(([lang, lines]) => {
+    const expectedText = lang === 'chi_sim'
+      ? "季度 报告 显示 各 地 区 收入 稳步 增长 。 客 户 满意 度 评分 较 上 期 提高 了 百 分 之 十 二 ， 而 运营 成 本 保持 稳定 。"
+      : lang === 'jpn'
+        ? "四半 期 報 告 書 は すべ て の 地域 で 収益 が 着実 に 増加 し て いる こと を 示し て いま す 。 顧 客 満足 度 ス コア は 前 期 と 比較 し て 12 パ ー セ ント 向上 し 、 運 営 コ スト は 安定 し て いま し た 。"
+        : languageParagraphText[lang];
+    return [
+      { name: `paragraph-${lang}`, file: `paragraph-${lang}.png`, lang, expectedText, mode: "word-accuracy" },
+      { name: `noisy-${lang}`, file: `noisy-${lang}.png`, lang, expectedText, mode: "word-accuracy" },
+    ];
+  }),
 ];
 writeFileSync(`${FIXTURE_DIR}manifest.json`, JSON.stringify(manifest, null, 2) + "\n");
 
