@@ -707,6 +707,53 @@ try {
     await context.close();
   }
 
+  // --- Real measured accuracy (docs/PERFORMANCE.md's degraded-conditions
+  // table) drops sharply below the other ten languages specifically for
+  // Hindi/Chinese(Simplified)/Japanese/Korean once a scan is rotated,
+  // blurry, or noisy. Rather than hide that, #language-hint discloses it
+  // in the UI for exactly those four — a *different* set from NON_LATIN
+  // above (Russian and Arabic score well above this group: 77.8%/89.7%
+  // degraded), so this needs its own direct check rather than reusing the
+  // PDF-gating list. ---
+  {
+    console.log(`\n=== multi-language: accuracy hint shown only for the four low-degraded-accuracy languages ===`);
+    const context = await browser.newContext();
+    const page = await context.newPage();
+    page.on("pageerror", (e) => console.error("[pageerror]", String(e)));
+    await page.goto(`${origin}/index.html`, { waitUntil: "load" });
+
+    const hiddenAtLoad = await page.$eval("#language-hint", (el) => el.hidden);
+    let allOk = hiddenAtLoad;
+    console.log(`  default (eng): hint hidden=${hiddenAtLoad} ${hiddenAtLoad ? "✓" : "✗"}`);
+
+    const LOW_ACCURACY = ["hin", "chi_sim", "jpn", "kor"];
+    for (const lang of LOW_ACCURACY) {
+      await page.selectOption("#language", lang);
+      const shown = !(await page.$eval("#language-hint", (el) => el.hidden));
+      allOk &&= shown;
+      console.log(`  ${lang}: hint shown=${shown} ${shown ? "✓" : "✗"}`);
+    }
+
+    // Every other language — including rus/ara, which the PDF-gating set
+    // above *does* flag but this one deliberately doesn't — must not show
+    // the hint, so the two sets are proven genuinely independent here.
+    const OTHER = ["eng", "fra", "spa", "deu", "por", "ita", "rus", "ara"];
+    for (const lang of OTHER) {
+      await page.selectOption("#language", lang);
+      const hidden = await page.$eval("#language-hint", (el) => el.hidden);
+      allOk &&= hidden;
+      console.log(`  ${lang}: hint hidden=${hidden} ${hidden ? "✓" : "✗"}`);
+    }
+
+    if (!allOk) {
+      console.error("✗ FAILED: accuracy hint visibility regressed.");
+      failed = true;
+    } else {
+      console.log("✓ Accuracy hint shows only for the four low-degraded-accuracy languages, and only those.");
+    }
+    await context.close();
+  }
+
   // --- The gating test above proves non-Latin-script languages are
   // blocked from the PDF path — this proves a Latin-script *non-English*
   // language isn't accidentally caught by the same net: French uses

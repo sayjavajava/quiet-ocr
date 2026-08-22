@@ -121,6 +121,14 @@ languages specifically; `.docx` (always fully Unicode) is unaffected and covers 
 languages. French, Spanish, German, Portuguese, and Italian's accented Latin characters are
 covered by WinAnsi, so Searchable PDF works normally for those.
 
+**Hindi, Chinese (Simplified), Japanese, and Korean show an in-app accuracy hint** — a different,
+smaller group than the six above, chosen from the real degraded-condition numbers in
+[`docs/PERFORMANCE.md`](docs/PERFORMANCE.md): these four drop well below the rest (39–63%) on a
+rotated, blurry, or noisy scan, while Russian and Arabic (also non-Latin-script, but not in this
+group) stay well above that (78%/90%). Rather than presenting all twelve languages as equally
+reliable, selecting one of these four shows a short note in the UI, linking to the real measured
+numbers, before you scan anything.
+
 ## Performance
 
 See [`docs/PERFORMANCE.md`](docs/PERFORMANCE.md) for real, measured engine-load and

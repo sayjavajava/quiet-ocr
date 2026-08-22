@@ -24,6 +24,7 @@ const outputFormatSelect = document.getElementById('output-format');
 const pdfFormatOption = document.getElementById('pdf-format-option');
 const downloadButton = document.getElementById('download');
 const languageSelect = document.getElementById('language');
+const languageHint = document.getElementById('language-hint');
 
 // pdf-export.js's invisible text layer uses StandardFonts.Helvetica, which
 // is WinAnsi-encoded (~220 code points — Latin script, including the
@@ -39,6 +40,15 @@ const languageSelect = document.getElementById('language');
 // searchable. .docx (always fully Unicode, via the `docx` library) is
 // unaffected and stays available for every supported language.
 const NON_LATIN_LANGS = new Set(['rus', 'ara', 'hin', 'chi_sim', 'jpn', 'kor']);
+
+// Real measured accuracy (docs/PERFORMANCE.md's "Multi-language OCR accuracy
+// under degraded conditions" table) drops sharply below the other ten
+// languages specifically for these four once a scan is rotated, blurry, or
+// noisy — not a guess, and notably not the same set as NON_LATIN_LANGS
+// above (Russian and Arabic score 77.8%/89.7% degraded, well above this
+// group). Flagged in the UI rather than hidden, matching this app's existing
+// disclose-don't-hide precedent for the PDF-format gating above.
+const LOW_DEGRADED_ACCURACY_LANGS = new Set(['hin', 'chi_sim', 'jpn', 'kor']);
 
 function updateOutputFormatAvailability() {
   const unavailable = NON_LATIN_LANGS.has(languageSelect.value);
@@ -58,6 +68,12 @@ languageSelect.addEventListener('change', updateOutputFormatAvailability);
 // language selected while the PDF option's static HTML (enabled) is what
 // actually renders.
 updateOutputFormatAvailability();
+
+function updateLanguageHint() {
+  languageHint.hidden = !LOW_DEGRADED_ACCURACY_LANGS.has(languageSelect.value);
+}
+languageSelect.addEventListener('change', updateLanguageHint);
+updateLanguageHint(); // same back-forward-cache reasoning as above
 
 let selectedFiles = [];
 // One entry per originally-selected file (not per rendered PDF page):
