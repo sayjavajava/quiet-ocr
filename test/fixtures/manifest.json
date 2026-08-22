@@ -118,5 +118,159 @@
     "lang": "kor",
     "expectedText": "분기 보고서는 꾸준한 증가를 보여줍니다",
     "mode": "exact"
+  },
+  {
+    "name": "paragraph-fra",
+    "file": "paragraph-fra.png",
+    "lang": "fra",
+    "expectedText": "Le rapport trimestriel montre une augmentation constante du chiffre d'affaires dans toutes les régions. Les scores de satisfaction client se sont améliorés de 12% par rapport à la période précédente, tandis que les coûts opérationnels sont restés stables.",
+    "mode": "word-accuracy"
+  },
+  {
+    "name": "noisy-fra",
+    "file": "noisy-fra.png",
+    "lang": "fra",
+    "expectedText": "Le rapport trimestriel montre une augmentation constante du chiffre d'affaires dans toutes les régions. Les scores de satisfaction client se sont améliorés de 12% par rapport à la période précédente, tandis que les coûts opérationnels sont restés stables.",
+    "mode": "word-accuracy"
+  },
+  {
+    "name": "paragraph-spa",
+    "file": "paragraph-spa.png",
+    "lang": "spa",
+    "expectedText": "El informe trimestral muestra un aumento constante de los ingresos en todas las regiones. Las puntuaciones de satisfacción del cliente mejoraron un 12% en comparación con el período anterior, mientras que los costos operativos se mantuvieron estables.",
+    "mode": "word-accuracy"
+  },
+  {
+    "name": "noisy-spa",
+    "file": "noisy-spa.png",
+    "lang": "spa",
+    "expectedText": "El informe trimestral muestra un aumento constante de los ingresos en todas las regiones. Las puntuaciones de satisfacción del cliente mejoraron un 12% en comparación con el período anterior, mientras que los costos operativos se mantuvieron estables.",
+    "mode": "word-accuracy"
+  },
+  {
+    "name": "paragraph-deu",
+    "file": "paragraph-deu.png",
+    "lang": "deu",
+    "expectedText": "Der Quartalsbericht zeigt einen stetigen Anstieg des Umsatzes in allen Regionen. Die Kundenzufriedenheit verbesserte sich um 12 Prozent im Vergleich zum Vorquartal, während die Betriebskosten stabil blieben.",
+    "mode": "word-accuracy"
+  },
+  {
+    "name": "noisy-deu",
+    "file": "noisy-deu.png",
+    "lang": "deu",
+    "expectedText": "Der Quartalsbericht zeigt einen stetigen Anstieg des Umsatzes in allen Regionen. Die Kundenzufriedenheit verbesserte sich um 12 Prozent im Vergleich zum Vorquartal, während die Betriebskosten stabil blieben.",
+    "mode": "word-accuracy"
+  },
+  {
+    "name": "paragraph-por",
+    "file": "paragraph-por.png",
+    "lang": "por",
+    "expectedText": "O relatório trimestral mostra um aumento constante da receita em todas as regiões. Os índices de satisfação do cliente melhoraram 12% em relação ao período anterior, enquanto os custos operacionais permaneceram estáveis.",
+    "mode": "word-accuracy"
+  },
+  {
+    "name": "noisy-por",
+    "file": "noisy-por.png",
+    "lang": "por",
+    "expectedText": "O relatório trimestral mostra um aumento constante da receita em todas as regiões. Os índices de satisfação do cliente melhoraram 12% em relação ao período anterior, enquanto os custos operacionais permaneceram estáveis.",
+    "mode": "word-accuracy"
+  },
+  {
+    "name": "paragraph-ita",
+    "file": "paragraph-ita.png",
+    "lang": "ita",
+    "expectedText": "Il rapporto trimestrale mostra un aumento costante dei ricavi in tutte le regioni. I punteggi di soddisfazione dei clienti sono migliorati del 12% rispetto al periodo precedente, mentre i costi operativi sono rimasti stabili.",
+    "mode": "word-accuracy"
+  },
+  {
+    "name": "noisy-ita",
+    "file": "noisy-ita.png",
+    "lang": "ita",
+    "expectedText": "Il rapporto trimestrale mostra un aumento costante dei ricavi in tutte le regioni. I punteggi di soddisfazione dei clienti sono migliorati del 12% rispetto al periodo precedente, mentre i costi operativi sono rimasti stabili.",
+    "mode": "word-accuracy"
+  },
+  {
+    "name": "paragraph-rus",
+    "file": "paragraph-rus.png",
+    "lang": "rus",
+    "expectedText": "Квартальный отчет показывает устойчивый рост выручки во всех регионах. Показатели удовлетворенности клиентов выросли на 12 процентов по сравнению с предыдущим периодом, при этом операционные расходы остались стабильными.",
+    "mode": "word-accuracy"
+  },
+  {
+    "name": "noisy-rus",
+    "file": "noisy-rus.png",
+    "lang": "rus",
+    "expectedText": "Квартальный отчет показывает устойчивый рост выручки во всех регионах. Показатели удовлетворенности клиентов выросли на 12 процентов по сравнению с предыдущим периодом, при этом операционные расходы остались стабильными.",
+    "mode": "word-accuracy"
+  },
+  {
+    "name": "paragraph-ara",
+    "file": "paragraph-ara.png",
+    "lang": "ara",
+    "expectedText": "يظهر التقرير الفصلي زيادة مطردة في الإيرادات في جميع المناطق تحسنت درجات رضا العملاء بنسبة 12 بالمئة مقارنة بالفترة السابقة بينما ظلت التكاليف التشغيلية مستقرة خلال هذه الفترة الزمنية",
+    "mode": "word-accuracy"
+  },
+  {
+    "name": "noisy-ara",
+    "file": "noisy-ara.png",
+    "lang": "ara",
+    "expectedText": "يظهر التقرير الفصلي زيادة مطردة في الإيرادات في جميع المناطق تحسنت درجات رضا العملاء بنسبة 12 بالمئة مقارنة بالفترة السابقة بينما ظلت التكاليف التشغيلية مستقرة خلال هذه الفترة الزمنية",
+    "mode": "word-accuracy"
+  },
+  {
+    "name": "paragraph-hin",
+    "file": "paragraph-hin.png",
+    "lang": "hin",
+    "expectedText": "तिमाही रिपोर्ट में सभी क्षेत्रों में राजस्व में स्थिर वृद्धि दिखाई गई है। ग्राहक संतुष्टि स्कोर में पिछली अवधि की तुलना में 12 प्रतिशत का सुधार हुआ, जबकि परिचालन लागत स्थिर रही।",
+    "mode": "word-accuracy"
+  },
+  {
+    "name": "noisy-hin",
+    "file": "noisy-hin.png",
+    "lang": "hin",
+    "expectedText": "तिमाही रिपोर्ट में सभी क्षेत्रों में राजस्व में स्थिर वृद्धि दिखाई गई है। ग्राहक संतुष्टि स्कोर में पिछली अवधि की तुलना में 12 प्रतिशत का सुधार हुआ, जबकि परिचालन लागत स्थिर रही।",
+    "mode": "word-accuracy"
+  },
+  {
+    "name": "paragraph-chi_sim",
+    "file": "paragraph-chi_sim.png",
+    "lang": "chi_sim",
+    "expectedText": "季度 报告 显示 各 地 区 收入 稳步 增长 。 客 户 满意 度 评分 较 上 期 提高 了 百 分 之 十 二 ， 而 运营 成 本 保持 稳定 。",
+    "mode": "word-accuracy"
+  },
+  {
+    "name": "noisy-chi_sim",
+    "file": "noisy-chi_sim.png",
+    "lang": "chi_sim",
+    "expectedText": "季度 报告 显示 各 地 区 收入 稳步 增长 。 客 户 满意 度 评分 较 上 期 提高 了 百 分 之 十 二 ， 而 运营 成 本 保持 稳定 。",
+    "mode": "word-accuracy"
+  },
+  {
+    "name": "paragraph-jpn",
+    "file": "paragraph-jpn.png",
+    "lang": "jpn",
+    "expectedText": "四半 期 報 告 書 は すべ て の 地域 で 収益 が 着実 に 増加 し て いる こと を 示し て いま す 。 顧 客 満足 度 ス コア は 前 期 と 比較 し て 12 パ ー セ ント 向上 し 、 運 営 コ スト は 安定 し て いま し た 。",
+    "mode": "word-accuracy"
+  },
+  {
+    "name": "noisy-jpn",
+    "file": "noisy-jpn.png",
+    "lang": "jpn",
+    "expectedText": "四半 期 報 告 書 は すべ て の 地域 で 収益 が 着実 に 増加 し て いる こと を 示し て いま す 。 顧 客 満足 度 ス コア は 前 期 と 比較 し て 12 パ ー セ ント 向上 し 、 運 営 コ スト は 安定 し て いま し た 。",
+    "mode": "word-accuracy"
+  },
+  {
+    "name": "paragraph-kor",
+    "file": "paragraph-kor.png",
+    "lang": "kor",
+    "expectedText": "분기 보고서는 모든 지역에서 매출이 꾸준히 증가하고 있음을 보여줍니다. 고객 만족도 점수는 이전 기간과 비교하여 12퍼센트 향상되었으며, 운영 비용은 안정적으로 유지되었습니다.",
+    "mode": "word-accuracy"
+  },
+  {
+    "name": "noisy-kor",
+    "file": "noisy-kor.png",
+    "lang": "kor",
+    "expectedText": "분기 보고서는 모든 지역에서 매출이 꾸준히 증가하고 있음을 보여줍니다. 고객 만족도 점수는 이전 기간과 비교하여 12퍼센트 향상되었으며, 운영 비용은 안정적으로 유지되었습니다.",
+    "mode": "word-accuracy"
   }
 ]

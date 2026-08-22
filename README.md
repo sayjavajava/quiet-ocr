@@ -70,12 +70,16 @@ Italian, Russian, Arabic, Hindi, Chinese (Simplified), Japanese, and Korean, pic
 language selector before you run OCR. Not simultaneous multi-language recognition (a document
 mixing, say, English and French in one run) — that's a real Tesseract capability this app doesn't
 expose yet. Every language listed was verified before being added, not just wired up and assumed
-to work: real font rendering checked (no missing-glyph boxes) and real recognition accuracy
-measured against real sentences in that language — see
+to work: real font rendering checked (no missing-glyph boxes), real recognition accuracy measured
+against clean text, and — since a real scan is rarely clean — real accuracy measured again under
+the same degraded conditions (rotated, noisy, blurred) English's own test fixtures already use,
+per language, not just for English. See
 [`test/fixtures/manifest.json`](test/fixtures/manifest.json)'s per-language fixtures and
-[`docs/PERFORMANCE.md`](docs/PERFORMANCE.md) for the numbers. Each language's trained-data file
-(0.7–3MB) is only ever fetched when you actually select that language — choosing English costs
-nothing extra for the other eleven sitting unused in `/vendor/`.
+[`docs/PERFORMANCE.md`](docs/PERFORMANCE.md)'s "Multi-language OCR accuracy under degraded
+conditions" section for the real numbers — accuracy under degradation varies meaningfully by
+language (77–100%), documented plainly rather than smoothed over. Each language's trained-data
+file (0.7–3MB) is only ever fetched when you actually select that language — choosing English
+costs nothing extra for the other eleven sitting unused in `/vendor/`.
 
 Input is images (PNG/JPEG/WebP/BMP) and PDFs — a selected PDF is rasterized into
 one page-image per page (client-side, via a self-hosted `pdfjs-dist`) before those images go
@@ -116,6 +120,14 @@ a "searchable" PDF with no actual searchable text, the format option is disabled
 languages specifically; `.docx` (always fully Unicode) is unaffected and covers all twelve
 languages. French, Spanish, German, Portuguese, and Italian's accented Latin characters are
 covered by WinAnsi, so Searchable PDF works normally for those.
+
+**Hindi, Chinese (Simplified), Japanese, and Korean show an in-app accuracy hint** — a different,
+smaller group than the six above, chosen from the real degraded-condition numbers in
+[`docs/PERFORMANCE.md`](docs/PERFORMANCE.md): these four drop well below the rest (39–63%) on a
+rotated, blurry, or noisy scan, while Russian and Arabic (also non-Latin-script, but not in this
+group) stay well above that (78%/90%). Rather than presenting all twelve languages as equally
+reliable, selecting one of these four shows a short note in the UI, linking to the real measured
+numbers, before you scan anything.
 
 ## Performance
 

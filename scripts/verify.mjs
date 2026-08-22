@@ -57,6 +57,34 @@ const THRESHOLDS = {
   // default: 95.0% (degraded page), 100% (clean page) — see
   // scripts/measure-pdf-dpi.mjs and docs/PERFORMANCE.md.
   "scanned-multipage": 0.85,
+
+  // Per-language degraded-accuracy fixtures (test/fixtures/manifest.json's
+  // paragraph-<lang>/noisy-<lang> entries) — the gap flagged when
+  // multi-language OCR shipped (#23): clean single-line accuracy was
+  // verified per language, but not the same noisy-scan-style degraded
+  // condition English's own paragraph/noisy-scan fixtures get. Every
+  // number below is real, measured (scripts/measure-fixture-accuracy.mjs)
+  // against the exact same degradation recipe as noisy-scan (6° rotation,
+  // seed 20260822, +/-85 noise, 1.1px blur, same 24px font — the
+  // per-language paragraphs were originally rendered smaller to fit a
+  // narrower canvas, which was caught as an unfair comparison before any
+  // number here was trusted: smaller text is inherently more vulnerable to
+  // the same absolute noise/blur, so an early, since-discarded pass showed
+  // implausibly bad scores — e.g. noisy-fra at 5.3% — that were a font-size
+  // artifact, not a real French-language weakness; re-measured at 24px,
+  // matching English exactly, before setting any of these), not guessed or
+  // copied from English's own threshold.
+  "paragraph-fra": 0.9, "noisy-fra": 0.85,
+  "paragraph-spa": 0.9, "noisy-spa": 0.85,
+  "paragraph-deu": 0.9, "noisy-deu": 0.9,
+  "paragraph-por": 0.9, "noisy-por": 0.7,
+  "paragraph-ita": 0.85, "noisy-ita": 0.85,
+  "paragraph-rus": 0.9, "noisy-rus": 0.65,
+  "paragraph-ara": 0.9, "noisy-ara": 0.8,
+  "paragraph-hin": 0.75, "noisy-hin": 0.4,
+  "paragraph-chi_sim": 0.9, "noisy-chi_sim": 0.5,
+  "paragraph-jpn": 0.85, "noisy-jpn": 0.25,
+  "paragraph-kor": 0.9, "noisy-kor": 0.4,
 };
 
 // Must match public/pdf-to-images.js's MAX_PDF_PAGES — not imported
@@ -675,6 +703,53 @@ try {
       failed = true;
     } else {
       console.log("✓ Searchable PDF is disabled (with an explanation) for every non-Latin-script language, and re-enables when switching back.");
+    }
+    await context.close();
+  }
+
+  // --- Real measured accuracy (docs/PERFORMANCE.md's degraded-conditions
+  // table) drops sharply below the other ten languages specifically for
+  // Hindi/Chinese(Simplified)/Japanese/Korean once a scan is rotated,
+  // blurry, or noisy. Rather than hide that, #language-hint discloses it
+  // in the UI for exactly those four — a *different* set from NON_LATIN
+  // above (Russian and Arabic score well above this group: 77.8%/89.7%
+  // degraded), so this needs its own direct check rather than reusing the
+  // PDF-gating list. ---
+  {
+    console.log(`\n=== multi-language: accuracy hint shown only for the four low-degraded-accuracy languages ===`);
+    const context = await browser.newContext();
+    const page = await context.newPage();
+    page.on("pageerror", (e) => console.error("[pageerror]", String(e)));
+    await page.goto(`${origin}/index.html`, { waitUntil: "load" });
+
+    const hiddenAtLoad = await page.$eval("#language-hint", (el) => el.hidden);
+    let allOk = hiddenAtLoad;
+    console.log(`  default (eng): hint hidden=${hiddenAtLoad} ${hiddenAtLoad ? "✓" : "✗"}`);
+
+    const LOW_ACCURACY = ["hin", "chi_sim", "jpn", "kor"];
+    for (const lang of LOW_ACCURACY) {
+      await page.selectOption("#language", lang);
+      const shown = !(await page.$eval("#language-hint", (el) => el.hidden));
+      allOk &&= shown;
+      console.log(`  ${lang}: hint shown=${shown} ${shown ? "✓" : "✗"}`);
+    }
+
+    // Every other language — including rus/ara, which the PDF-gating set
+    // above *does* flag but this one deliberately doesn't — must not show
+    // the hint, so the two sets are proven genuinely independent here.
+    const OTHER = ["eng", "fra", "spa", "deu", "por", "ita", "rus", "ara"];
+    for (const lang of OTHER) {
+      await page.selectOption("#language", lang);
+      const hidden = await page.$eval("#language-hint", (el) => el.hidden);
+      allOk &&= hidden;
+      console.log(`  ${lang}: hint hidden=${hidden} ${hidden ? "✓" : "✗"}`);
+    }
+
+    if (!allOk) {
+      console.error("✗ FAILED: accuracy hint visibility regressed.");
+      failed = true;
+    } else {
+      console.log("✓ Accuracy hint shows only for the four low-degraded-accuracy languages, and only those.");
     }
     await context.close();
   }
