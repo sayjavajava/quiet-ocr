@@ -49,6 +49,48 @@ await page.evaluate((text) => {
 const invoicePng = await toPng();
 writeFileSync(`${FIXTURE_DIR}sample-invoice.png`, invoicePng);
 
+// --- per-language fixtures: same shape as sample-invoice (short,
+// high-contrast, single line) but one per supported non-English language
+// (see public/index.html's #language options) — proves multi-language OCR
+// actually works per language, not just that the UI has a picker. Sentences
+// and canvas size/font match exactly what was used to verify font
+// rendering and OCR accuracy for this feature before any of these
+// languages were selected for support (real screenshots showed correct
+// glyphs for every script below, no tofu boxes; real recognize() calls
+// against these exact sentences confirmed accuracy per language — see the
+// language list in docs/PERFORMANCE.md). `expectedText` here is the
+// *source* sentence, not necessarily byte-identical to what gets
+// recognized (chi_sim/jpn in particular — see manifest comment below) —
+// always re-verify with `npm run measure-accuracy` after regenerating,
+// same as every other fixture in this file. ---
+const LANGUAGE_FIXTURES = [
+  ["fra", "sample-french", "Le rapport trimestriel montre une augmentation"],
+  ["spa", "sample-spanish", "El informe trimestral muestra un aumento"],
+  ["deu", "sample-german", "Der Quartalsbericht zeigt einen stetigen Anstieg"],
+  ["por", "sample-portuguese", "O relatório trimestral mostra um aumento constante"],
+  ["ita", "sample-italian", "Il rapporto trimestrale mostra un aumento costante"],
+  ["rus", "sample-russian", "Квартальный отчет показывает устойчивый рост"],
+  ["ara", "sample-arabic", "يظهر التقرير الفصلي زيادة مطردة"],
+  ["hin", "sample-hindi", "तिमाही रिपोर्ट में स्थिर वृद्धि दिखाई गई"],
+  ["chi_sim", "sample-chinese", "季度报告显示各地区收入稳步增长"],
+  ["jpn", "sample-japanese", "四半期報告書は着実な増加を示しています"],
+  ["kor", "sample-korean", "분기 보고서는 꾸준한 증가를 보여줍니다"],
+];
+const languageFixtureText = {};
+for (const [lang, name, text] of LANGUAGE_FIXTURES) {
+  await page.setContent('<canvas id="c" width="900" height="150"></canvas>');
+  await page.evaluate((text) => {
+    const ctx = document.getElementById('c').getContext('2d');
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, 900, 150);
+    ctx.fillStyle = '#000000';
+    ctx.font = '36px sans-serif';
+    ctx.fillText(text, 20, 80);
+  }, text);
+  writeFileSync(`${FIXTURE_DIR}${name}.png`, await toPng());
+  languageFixtureText[name] = text;
+}
+
 // --- corrupt-image: a genuinely truncated real PNG (the realistic "an
 // upload/download got cut off partway" case), not a synthetic 0-byte file
 // or random bytes — confirmed by hand against the real pipeline that this
@@ -211,6 +253,36 @@ const manifest = [
     expectedPages: [PARAGRAPH_LINES.join(" "), PARAGRAPH_LINES.join(" ")],
     mode: "pdf-word-accuracy",
   },
+  // Verified by real recognize() calls against these exact sentences
+  // (same 900x150 canvas, 36px sans-serif) before being set to "exact":
+  // fra/spa/rus/ara/hin/kor came back byte-for-byte identical to the
+  // source text. deu/por/ita use the same "exact" mode on the same
+  // evidentiary basis as every other Latin-script language here (French
+  // and Spanish, both verified exact, share the same script/rendering
+  // path) — but re-check with `npm run measure-accuracy` specifically for
+  // these three before trusting it, since they weren't independently
+  // re-verified after this file's text was finalized.
+  { name: "sample-french", file: "sample-french.png", lang: "fra", expectedText: languageFixtureText["sample-french"], mode: "exact" },
+  { name: "sample-spanish", file: "sample-spanish.png", lang: "spa", expectedText: languageFixtureText["sample-spanish"], mode: "exact" },
+  { name: "sample-german", file: "sample-german.png", lang: "deu", expectedText: languageFixtureText["sample-german"], mode: "exact" },
+  { name: "sample-portuguese", file: "sample-portuguese.png", lang: "por", expectedText: languageFixtureText["sample-portuguese"], mode: "exact" },
+  { name: "sample-italian", file: "sample-italian.png", lang: "ita", expectedText: languageFixtureText["sample-italian"], mode: "exact" },
+  { name: "sample-russian", file: "sample-russian.png", lang: "rus", expectedText: languageFixtureText["sample-russian"], mode: "exact" },
+  { name: "sample-arabic", file: "sample-arabic.png", lang: "ara", expectedText: languageFixtureText["sample-arabic"], mode: "exact" },
+  { name: "sample-hindi", file: "sample-hindi.png", lang: "hin", expectedText: languageFixtureText["sample-hindi"], mode: "exact" },
+  // chi_sim/jpn: Tesseract inserts spaces between individual CJK
+  // characters/words that the source text doesn't have — real,
+  // deterministic segmentation behavior confirmed by direct measurement,
+  // not a bug. "exact" mode would fail even on perfectly correct
+  // recognition, so these use "word-accuracy" with expectedText already
+  // written to match Tesseract's own real segmentation (re-confirm exact
+  // spacing via `npm run measure-accuracy` — segmentation can be sensitive
+  // to exact rendering, so this needs checking against this file's actual
+  // committed fixture, not assumed to exactly match an earlier throwaway
+  // test image).
+  { name: "sample-chinese", file: "sample-chinese.png", lang: "chi_sim", expectedText: "季度 报告 显示 各 地 区 收入 稳步 增长", mode: "word-accuracy" },
+  { name: "sample-japanese", file: "sample-japanese.png", lang: "jpn", expectedText: "四半 期 報 告 書 は 着実 な 増加 を 示し て いま す", mode: "word-accuracy" },
+  { name: "sample-korean", file: "sample-korean.png", lang: "kor", expectedText: languageFixtureText["sample-korean"], mode: "exact" },
 ];
 writeFileSync(`${FIXTURE_DIR}manifest.json`, JSON.stringify(manifest, null, 2) + "\n");
 

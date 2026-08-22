@@ -41,5 +41,82 @@
       "The quarterly report shows a steady increase in revenue across all regions. Customer satisfaction scores improved by 12% compared to the previous period, while operational costs remained flat. The board recommends continuing the current strategy through the next fiscal year."
     ],
     "mode": "pdf-word-accuracy"
+  },
+  {
+    "name": "sample-french",
+    "file": "sample-french.png",
+    "lang": "fra",
+    "expectedText": "Le rapport trimestriel montre une augmentation",
+    "mode": "exact"
+  },
+  {
+    "name": "sample-spanish",
+    "file": "sample-spanish.png",
+    "lang": "spa",
+    "expectedText": "El informe trimestral muestra un aumento",
+    "mode": "exact"
+  },
+  {
+    "name": "sample-german",
+    "file": "sample-german.png",
+    "lang": "deu",
+    "expectedText": "Der Quartalsbericht zeigt einen stetigen Anstieg",
+    "mode": "exact"
+  },
+  {
+    "name": "sample-portuguese",
+    "file": "sample-portuguese.png",
+    "lang": "por",
+    "expectedText": "O relatório trimestral mostra um aumento constante",
+    "mode": "exact"
+  },
+  {
+    "name": "sample-italian",
+    "file": "sample-italian.png",
+    "lang": "ita",
+    "expectedText": "Il rapporto trimestrale mostra un aumento costante",
+    "mode": "exact"
+  },
+  {
+    "name": "sample-russian",
+    "file": "sample-russian.png",
+    "lang": "rus",
+    "expectedText": "Квартальный отчет показывает устойчивый рост",
+    "mode": "exact"
+  },
+  {
+    "name": "sample-arabic",
+    "file": "sample-arabic.png",
+    "lang": "ara",
+    "expectedText": "يظهر التقرير الفصلي زيادة مطردة",
+    "mode": "exact"
+  },
+  {
+    "name": "sample-hindi",
+    "file": "sample-hindi.png",
+    "lang": "hin",
+    "expectedText": "तिमाही रिपोर्ट में स्थिर वृद्धि दिखाई गई",
+    "mode": "exact"
+  },
+  {
+    "name": "sample-chinese",
+    "file": "sample-chinese.png",
+    "lang": "chi_sim",
+    "expectedText": "季度 报告 显示 各 地 区 收入 稳步 增长",
+    "mode": "word-accuracy"
+  },
+  {
+    "name": "sample-japanese",
+    "file": "sample-japanese.png",
+    "lang": "jpn",
+    "expectedText": "四半 期 報 告 書 は 着実 な 増加 を 示し て いま す",
+    "mode": "word-accuracy"
+  },
+  {
+    "name": "sample-korean",
+    "file": "sample-korean.png",
+    "lang": "kor",
+    "expectedText": "분기 보고서는 꾸준한 증가를 보여줍니다",
+    "mode": "exact"
   }
 ]

@@ -59,6 +59,12 @@ canvases the accuracy fixtures use.
   each, median): 14,062ms without `blocks: true` vs. 14,096ms with it, a 0.2% difference, well
   within run-to-run noise. `ESTIMATED_SECONDS_PER_ITEM` (`public/app.js`) doesn't need
   adjusting on this evidence.
+- **Language choice doesn't change recognize() time meaningfully either.** Multi-language OCR
+  (11 non-English languages, see README's "Scope, for now") measured against the same
+  large-photo shape, each with real paragraph-length text in that language/script: English
+  16,409ms, Arabic 14,030ms, Chinese Simplified 16,637ms — all in the same ~14–17s band this
+  document already establishes for a full scanned page, no outlier. `ESTIMATED_SECONDS_PER_ITEM`
+  stays a single constant across all supported languages on this evidence.
 
 ## PDF input
 

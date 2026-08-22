@@ -248,7 +248,7 @@ h1 .grad {
 .btn-ghost:hover { color: var(--fg); border-color: var(--primary); }
 .btn-ghost:disabled { opacity: 0.5; cursor: not-allowed; }
 
-#output-format {
+.select-control {
   font-family: var(--font-body);
   font-size: 0.82rem;
   font-weight: 500;
@@ -259,7 +259,20 @@ h1 .grad {
   padding: 0.5rem 0.6rem;
   cursor: pointer;
 }
-#output-format:disabled { opacity: 0.5; cursor: not-allowed; }
+.select-control:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.language-picker {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+  margin: 0 0 1rem;
+}
+.language-picker label {
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+.language-picker .select-control { flex: 1 1 auto; max-width: 220px; }
 
 /* ---- file list (populated by app.js: <li><img><span.file-name><span.file-status></li>) ---- */
 #file-list {

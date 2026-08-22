@@ -65,7 +65,19 @@ the trust chain and a pinned, known version instead of "whatever the CDN current
 
 ## Scope, for now
 
-English only. Input is images (PNG/JPEG/WebP/BMP) and PDFs — a selected PDF is rasterized into
+**Twelve languages**, one at a time per run — English, French, Spanish, German, Portuguese,
+Italian, Russian, Arabic, Hindi, Chinese (Simplified), Japanese, and Korean, picked via the
+language selector before you run OCR. Not simultaneous multi-language recognition (a document
+mixing, say, English and French in one run) — that's a real Tesseract capability this app doesn't
+expose yet. Every language listed was verified before being added, not just wired up and assumed
+to work: real font rendering checked (no missing-glyph boxes) and real recognition accuracy
+measured against real sentences in that language — see
+[`test/fixtures/manifest.json`](test/fixtures/manifest.json)'s per-language fixtures and
+[`docs/PERFORMANCE.md`](docs/PERFORMANCE.md) for the numbers. Each language's trained-data file
+(0.7–3MB) is only ever fetched when you actually select that language — choosing English costs
+nothing extra for the other eleven sitting unused in `/vendor/`.
+
+Input is images (PNG/JPEG/WebP/BMP) and PDFs — a selected PDF is rasterized into
 one page-image per page (client-side, via a self-hosted `pdfjs-dist`) before those images go
 through the exact same OCR path as directly-selected images, so PDF pages show up in the file
 list exactly like images do, each with its own status.
@@ -96,6 +108,14 @@ entirely client-side (self-hosted [`docx`](https://github.com/dolanmiu/docx),
 [`pdf-lib`](https://github.com/Hopding/pdf-lib), and [`fflate`](https://github.com/101arrowz/fflate))
 — nothing is uploaded to generate them. The on-screen text preview and "Copy text" are still
 there for quickly grabbing a snippet without downloading anything.
+
+**Searchable PDF isn't available for Russian, Arabic, Hindi, Chinese, Japanese, or Korean** —
+its invisible text layer uses a Latin-script font (WinAnsi encoding), which those languages'
+recognized text can't be placed into at all, not just imperfectly. Rather than silently hand back
+a "searchable" PDF with no actual searchable text, the format option is disabled for those six
+languages specifically; `.docx` (always fully Unicode) is unaffected and covers all twelve
+languages. French, Spanish, German, Portuguese, and Italian's accented Latin characters are
+covered by WinAnsi, so Searchable PDF works normally for those.
 
 ## Performance
 

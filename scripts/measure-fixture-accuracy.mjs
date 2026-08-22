@@ -33,6 +33,7 @@ const browser = await chromium.launch(launchOptions);
 for (const fixture of manifest) {
   const page = await browser.newPage();
   await page.goto(`${origin}/index.html`, { waitUntil: "load" });
+  if (fixture.lang) await page.selectOption("#language", fixture.lang);
   await page.setInputFiles("#file-input", `${FIXTURE_DIR}${fixture.file}`);
   await page.click("#run");
   await page.waitForFunction(
