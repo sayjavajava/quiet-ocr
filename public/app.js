@@ -9,6 +9,7 @@
 
 import { pdfToImageFiles, isPdfFile } from './pdf-to-images.js';
 import { buildDocxBlob } from './docx-export.js';
+import { buildSearchablePdfBlob } from './pdf-export.js';
 import { zipBlobs } from './zip-export.js';
 
 const fileInput = document.getElementById('file-input');
@@ -19,17 +20,35 @@ const statusEl = document.getElementById('status');
 const resultSection = document.getElementById('result-section');
 const resultEl = document.getElementById('result');
 const copyButton = document.getElementById('copy');
+const outputFormatSelect = document.getElementById('output-format');
 const downloadButton = document.getElementById('download');
 
 let selectedFiles = [];
 // One entry per originally-selected file (not per rendered PDF page):
 // `{ name, indices }`, where `indices` are that file's position(s) in
-// `selectedFiles`/`results` — a plain image has one index, a PDF has one
-// per rendered page. This is what lets the .docx export below turn a
-// 5-page PDF back into a single 5-page Word document instead of 5 separate
-// one-page ones, even though OCR itself still runs per rendered page.
+// `selectedFiles`/`lastResults` — a plain image has one index, a PDF has
+// one per rendered page. This is what lets the .docx/.pdf export below
+// turn a 5-page PDF back into a single 5-page document instead of 5
+// separate one-page ones, even though OCR itself still runs per rendered
+// page.
 let fileGroups = [];
+// Kept at module scope (not local to the Run click handler) so the
+// Download click handler — a separate listener — can build the
+// searchable-PDF output on demand, from the same data the .docx build
+// already used: which file each result came from, and its words.
+let lastResults = [];
 let docxOutputs = []; // `{ name, blob }[]`, rebuilt after every run
+// PDF export embeds a full raster page image per page — a real CPU/memory
+// cost `.docx` (pure text) doesn't have, plausibly hundreds of MB for a
+// large scanned batch (up to MAX_PDF_PAGES). Built lazily, on first actual
+// need, rather than unconditionally every run alongside docxOutputs.
+let pdfOutputs = [];
+let isBuildingPdf = false;
+// Identifies which run pdfOutputs (if any) was built from, so switching
+// back to a format already built doesn't rebuild it, while a stale cache
+// left over from an earlier run never gets served for a later one.
+let currentRunId = 0;
+let pdfOutputsRunId = -1;
 let previewUrls = [];
 let worker = null;
 // Belt-and-suspenders alongside fileInput.disabled: that attribute stops a
@@ -89,6 +108,55 @@ function formatEstimate(seconds) {
   if (seconds < 60) return `~${Math.round(seconds)}s`;
   const minutes = Math.round(seconds / 60);
   return `~${minutes} minute${minutes === 1 ? '' : 's'}`;
+}
+
+// tesseract.js's word-level output is a nested tree
+// (blocks[].paragraphs[].lines[].words[]), not a flat list — confirmed
+// directly from its type definitions, not assumed. Flattened here into a
+// plain { text, bbox: {x0,y0,x1,y1}, confidence }[] once, right after
+// recognize(), so pdf-export.js's per-word placement logic doesn't need to
+// know anything about Tesseract's internal document structure.
+function flattenWords(blocks) {
+  const words = [];
+  for (const block of blocks ?? []) {
+    for (const paragraph of block.paragraphs ?? []) {
+      for (const line of paragraph.lines ?? []) {
+        for (const word of line.words ?? []) {
+          words.push({ text: word.text, bbox: word.bbox, confidence: word.confidence });
+        }
+      }
+    }
+  }
+  return words;
+}
+
+// Two files with the same name (a real scenario — a repeated fixture in a
+// test batch, or genuinely two files named "scan.pdf" from two different
+// folders) would otherwise both produce e.g. "scan.docx" and silently
+// collapse into one entry when zipped, losing one of the two documents
+// with no error or warning. Each output format gets its own fresh naming
+// state (a completed .docx build's names must not affect a later .pdf
+// build's own numbering) — call this once per build, then call the
+// returned function synchronously, in order, once per file group, so
+// Array.prototype.map's guaranteed in-order synchronous invocation keeps
+// the counts correct regardless of which iteration's blob finishes
+// building first.
+function makeUniqueNamer(extension) {
+  const seenNames = new Map();
+  return (originalName) => {
+    const base = `${originalName.replace(/\.[^.]+$/, '')}.${extension}`;
+    const count = (seenNames.get(base) ?? 0) + 1;
+    seenNames.set(base, count);
+    if (count === 1) return base;
+    const dot = base.lastIndexOf('.');
+    return `${base.slice(0, dot)} (${count})${base.slice(dot)}`;
+  };
+}
+
+function updateDownloadButtonLabel() {
+  const isMulti = fileGroups.length > 1;
+  const format = outputFormatSelect.value;
+  downloadButton.textContent = isMulti ? 'Download .zip' : (format === 'pdf' ? 'Download .pdf' : 'Download .docx');
 }
 
 function clearPreviewUrls() {
@@ -260,7 +328,17 @@ runButton.addEventListener('click', async () => {
   resultSection.hidden = true;
   statusEl.textContent = 'Loading OCR engine…';
 
-  const results = [];
+  // Reset explicitly, not just reassigned on success at the end — a run
+  // that throws before reaching that point (e.g. worker creation fails)
+  // would otherwise leave the *previous* run's outputs silently valid,
+  // with Download still enabled over stale content. Both formats reset
+  // together so they can never end up stale relative to each other (one
+  // holding this run's data, the other a leftover from the last one).
+  currentRunId += 1;
+  docxOutputs = [];
+  pdfOutputs = [];
+  pdfOutputsRunId = -1;
+  lastResults = [];
   let wasCancelled = false;
 
   try {
@@ -297,8 +375,13 @@ runButton.addEventListener('click', async () => {
       // simply abandoned (never awaited again) rather than relied on to
       // settle, and the worker is terminated for cleanup in the `finally`
       // block below regardless of which branch this took.
+      // { blocks: true } asks for word-level boxes alongside the plain
+      // text — off by default (see flattenWords below for why), needed for
+      // the searchable-PDF export's invisible text layer, which places
+      // each word at its own real position rather than one text blob per
+      // page.
       const outcome = await Promise.race([
-        worker.recognize(file).then(
+        worker.recognize(file, {}, { blocks: true }).then(
           ({ data }) => ({ type: 'done', data }),
           (error) => ({ type: 'error', error }),
         ),
@@ -309,7 +392,7 @@ runButton.addEventListener('click', async () => {
         wasCancelled = true;
         break;
       } else if (outcome.type === 'done') {
-        results.push({ name: file.name, text: outcome.data.text });
+        lastResults.push({ name: file.name, text: outcome.data.text, words: flattenWords(outcome.data.blocks) });
         setFileStatus(i, 'Done', 'done');
       } else {
         // One bad image (corrupt file, unsupported content) shouldn't sink
@@ -325,23 +408,23 @@ runButton.addEventListener('click', async () => {
         // placeholder) inherits the clean version instead of fixing each
         // display site separately.
         const message = (outcome.error?.message ?? String(outcome.error)).replace(/^error:\s*/i, '');
-        results.push({ name: file.name, error: message });
+        lastResults.push({ name: file.name, error: message });
         setFileStatus(i, `Error: ${message}`, 'error');
       }
     }
 
     // Marks both the item that was in flight when cancel landed and every
-    // item that never started — results.length is exactly the count of
+    // item that never started — lastResults.length is exactly the count of
     // items that got a real (done/error) outcome, since cancelled items
     // are never pushed to it.
     if (wasCancelled) {
-      for (let j = results.length; j < selectedFiles.length; j++) {
+      for (let j = lastResults.length; j < selectedFiles.length; j++) {
         setFileStatus(j, 'Cancelled', 'cancelled');
       }
     }
 
     delete statusEl.dataset.prefix;
-    resultEl.value = buildCombinedText(results);
+    resultEl.value = buildCombinedText(lastResults);
     resultSection.hidden = false;
 
     // One .docx per originally-selected file (a multi-page PDF's pages
@@ -349,35 +432,17 @@ runButton.addEventListener('click', async () => {
     // built at selection time, see the change handler above), not per
     // rendered image — an N-page PDF should come back as one N-page Word
     // document, not N single-page ones.
-    // Two files with the same name (a real scenario — a repeated fixture
-    // in a test batch, or genuinely two files named "scan.pdf" from two
-    // different folders) would otherwise both produce "scan.docx" and
-    // silently collapse into one entry when zipped, losing one of the two
-    // documents with no error or warning. uniqueDocxName is computed
-    // synchronously as the first thing in each iteration — before the
-    // async buildDocxBlob call — so Array.prototype.map's guaranteed
-    // in-order synchronous invocation keeps `seenNames` correct regardless
-    // of which iteration's blob finishes building first.
-    const seenNames = new Map();
-    function uniqueDocxName(originalName) {
-      const base = `${originalName.replace(/\.[^.]+$/, '')}.docx`;
-      const count = (seenNames.get(base) ?? 0) + 1;
-      seenNames.set(base, count);
-      if (count === 1) return base;
-      const dot = base.lastIndexOf('.');
-      return `${base.slice(0, dot)} (${count})${base.slice(dot)}`;
-    }
-
+    const uniqueDocxName = makeUniqueNamer('docx');
     docxOutputs = await Promise.all(
       fileGroups.map(async (group) => {
         const name = uniqueDocxName(group.name);
         const pages = group.indices.map((i) => {
           // Cancelling before every item finishes leaves indices beyond
-          // where the loop broke with no entry in `results` at all —
+          // where the loop broke with no entry in `lastResults` at all —
           // guard against that rather than letting `undefined.error` throw
           // (a real gap, not hypothetical: cancelling before item 0
-          // finishes leaves `results` empty).
-          const r = results[i];
+          // finishes leaves `lastResults` empty).
+          const r = lastResults[i];
           if (!r) return '[Cancelled — not recognized]';
           return r.error ? `[Error recognizing this page: ${r.error}]` : r.text;
         });
@@ -385,20 +450,20 @@ runButton.addEventListener('click', async () => {
         return { name, blob };
       }),
     );
-    downloadButton.textContent = docxOutputs.length > 1 ? 'Download .zip' : 'Download .docx';
+    updateDownloadButtonLabel();
     downloadButton.disabled = docxOutputs.length === 0;
 
     if (wasCancelled) {
-      statusEl.textContent = `Cancelled — ${results.length} of ${selectedFiles.length} recognized.`;
+      statusEl.textContent = `Cancelled — ${lastResults.length} of ${selectedFiles.length} recognized.`;
     } else {
-      // results.length > 0 guards against [].every() on an empty array
+      // lastResults.length > 0 guards against [].every() on an empty array
       // vacuously returning true — not reachable via this branch today
       // (wasCancelled is checked first, and a non-cancelled run always
       // processes every selected file), but kept as an explicit guard
       // rather than relying on that invariant silently holding forever.
-      const allFailed = results.length > 0 && results.every((r) => r.error);
+      const allFailed = lastResults.length > 0 && lastResults.every((r) => r.error);
       statusEl.textContent = allFailed
-        ? `Error: all ${results.length} file(s) failed to recognize`
+        ? `Error: all ${lastResults.length} file(s) failed to recognize`
         : 'Done.';
     }
   } catch (error) {
@@ -446,12 +511,66 @@ copyButton.addEventListener('click', async () => {
   setTimeout(() => { copyButton.textContent = 'Copy text'; }, 1500);
 });
 
-downloadButton.addEventListener('click', async () => {
-  if (docxOutputs.length === 0) return;
+outputFormatSelect.addEventListener('change', () => {
+  updateDownloadButtonLabel();
+});
 
-  const { blob, filename } = docxOutputs.length === 1
-    ? { blob: docxOutputs[0].blob, filename: docxOutputs[0].name }
-    : { blob: await zipBlobs(docxOutputs), filename: 'ocr-results.zip' };
+downloadButton.addEventListener('click', async () => {
+  // docxOutputs is the "is there anything to download at all" signal
+  // regardless of which format is currently selected — it's always built
+  // eagerly, right after every run, so its length reliably tracks whether
+  // this run produced anything, the same way it did before the PDF format
+  // existed.
+  if (docxOutputs.length === 0 || isBuildingPdf) return;
+
+  if (outputFormatSelect.value === 'pdf' && pdfOutputsRunId !== currentRunId) {
+    // Locked as the first statement, before any await — same discipline
+    // as isRunning/isRendering elsewhere in this file, guarding against a
+    // rapid double-click starting two concurrent builds.
+    isBuildingPdf = true;
+    const thisRunId = currentRunId;
+    outputFormatSelect.disabled = true;
+    downloadButton.disabled = true;
+    const labelBeforeBuild = downloadButton.textContent;
+    downloadButton.textContent = 'Preparing PDF…';
+    try {
+      const uniquePdfName = makeUniqueNamer('pdf');
+      const built = await Promise.all(
+        fileGroups.map(async (group) => {
+          const name = uniquePdfName(group.name);
+          const pages = group.indices.map((i) => {
+            const r = lastResults[i];
+            // Same degradation the .docx build already applies for a
+            // missing/errored result — but the image is still embedded
+            // regardless (pdf-export.js handles that): not having
+            // recognized text is not the same as not having the file.
+            return { file: selectedFiles[i], words: r && !r.error ? r.words : null };
+          });
+          const blob = await buildSearchablePdfBlob(pages);
+          return { name, blob };
+        }),
+      );
+      // A new run could have started (and reset everything) while this
+      // build was in flight — only commit the result if it's still for
+      // the run it was built from.
+      if (thisRunId === currentRunId) {
+        pdfOutputs = built;
+        pdfOutputsRunId = thisRunId;
+      }
+    } finally {
+      isBuildingPdf = false;
+      outputFormatSelect.disabled = false;
+      downloadButton.disabled = docxOutputs.length === 0;
+      downloadButton.textContent = labelBeforeBuild;
+    }
+  }
+
+  const outputs = outputFormatSelect.value === 'pdf' ? pdfOutputs : docxOutputs;
+  if (outputs.length === 0) return;
+
+  const { blob, filename } = outputs.length === 1
+    ? { blob: outputs[0].blob, filename: outputs[0].name }
+    : { blob: await zipBlobs(outputs), filename: 'ocr-results.zip' };
 
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');

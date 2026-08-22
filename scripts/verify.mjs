@@ -28,7 +28,7 @@ import { fileURLToPath } from "node:url";
 import { unzipSync, strFromU8 } from "fflate";
 import { startServer } from "./serve.mjs";
 import { wordAccuracy, parseLabelledBlocks } from "./text-accuracy.mjs";
-import { readDocxText, readDocxPages, selectFilesInBrowser, waitForStatus, waitForRunEnabled, waitForText } from "./browser-test-helpers.mjs";
+import { readDocxText, readDocxPages, readPdfPagesText, pdfHasInvisibleTextOperator, selectFilesInBrowser, waitForStatus, waitForRunEnabled, waitForText } from "./browser-test-helpers.mjs";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const PUBLIC_DIR = `${ROOT}public`;
@@ -578,6 +578,257 @@ try {
     await context.close();
   }
 
+  // --- Searchable-PDF export: the same "sandwich PDF" technique real OCR
+  // tools use (original page image, unchanged, with an invisible text
+  // layer underneath) as an alternative to .docx. Format defaults to
+  // .docx (byte-identical to every test above, none of which ever touch
+  // #output-format) — these are additive checks for the new format, not a
+  // replacement for the docx coverage above. ---
+  {
+    console.log(`\n=== searchable PDF: format selector defaults to .docx, unmodified ===`);
+    const invoiceFixture = manifest.find((f) => f.name === "sample-invoice");
+    const context = await browser.newContext();
+    const page = await context.newPage();
+    page.on("pageerror", (e) => console.error("[pageerror]", String(e)));
+
+    await page.goto(`${origin}/index.html`, { waitUntil: "load" });
+    const defaultFormat = await page.inputValue("#output-format");
+    await page.setInputFiles("#file-input", `${FIXTURE_DIR}${invoiceFixture.file}`);
+    await page.click("#run");
+    await waitForStatus(page, (s) => s === "Done.", { timeoutMs: 60000, label: "the run to finish" });
+    const label = await page.textContent("#download");
+    const [download] = await Promise.all([page.waitForEvent("download"), page.click("#download")]);
+    const bytes = new Uint8Array(readFileSync(await download.path()));
+
+    const ok = defaultFormat === "docx" && label === "Download .docx"
+      && bytes[0] === 0x50 && bytes[1] === 0x4b // "PK" — still a .docx (zip), not a PDF
+      && readDocxText(bytes).includes(invoiceFixture.expectedText);
+    console.log(`Default format: "${defaultFormat}", label: "${label}"`);
+    if (!ok) {
+      console.error("✗ FAILED: adding the PDF format changed the default .docx behavior.");
+      failed = true;
+    } else {
+      console.log("✓ #output-format defaults to docx, and default-format export is unaffected by the new PDF path.");
+    }
+    await context.close();
+  }
+
+  {
+    console.log(`\n=== searchable PDF: single image ===`);
+    const invoiceFixture = manifest.find((f) => f.name === "sample-invoice");
+    const context = await browser.newContext();
+    const page = await context.newPage();
+    page.on("pageerror", (e) => console.error("[pageerror]", String(e)));
+
+    await page.goto(`${origin}/index.html`, { waitUntil: "load" });
+    await page.setInputFiles("#file-input", `${FIXTURE_DIR}${invoiceFixture.file}`);
+    await page.click("#run");
+    await waitForStatus(page, (s) => s === "Done.", { timeoutMs: 60000, label: "the run to finish" });
+    await page.selectOption("#output-format", "pdf");
+
+    const [download] = await Promise.all([page.waitForEvent("download"), page.click("#download")]);
+    const bytes = new Uint8Array(readFileSync(await download.path()));
+    const magic = String.fromCharCode(...bytes.subarray(0, 4));
+    const pages = await readPdfPagesText(bytes);
+
+    const ok = download.suggestedFilename() === "sample-invoice.pdf"
+      && magic === "%PDF" && pages.length === 1
+      && pages[0].includes("Invoice") && pages[0].includes("88214") && pages[0].includes("942.50");
+    console.log(`Filename: ${download.suggestedFilename()}, magic: ${JSON.stringify(magic)}, page 1 text: ${JSON.stringify(pages[0])}`);
+    if (!ok) {
+      console.error("✗ FAILED: single-image searchable-PDF export didn't produce the expected file/content.");
+      failed = true;
+    } else {
+      console.log("✓ Single image downloads as a real PDF with the recognized text genuinely extractable.");
+    }
+    await context.close();
+  }
+
+  {
+    console.log(`\n=== searchable PDF: text is genuinely invisible, not alpha-faded ===`);
+    const invoiceFixture = manifest.find((f) => f.name === "sample-invoice");
+    const context = await browser.newContext();
+    const page = await context.newPage();
+    page.on("pageerror", (e) => console.error("[pageerror]", String(e)));
+
+    await page.goto(`${origin}/index.html`, { waitUntil: "load" });
+    await page.setInputFiles("#file-input", `${FIXTURE_DIR}${invoiceFixture.file}`);
+    await page.click("#run");
+    await waitForStatus(page, (s) => s === "Done.", { timeoutMs: 60000, label: "the run to finish" });
+    await page.selectOption("#output-format", "pdf");
+    const [download] = await Promise.all([page.waitForEvent("download"), page.click("#download")]);
+    const bytes = new Uint8Array(readFileSync(await download.path()));
+    const hasInvisibleOp = pdfHasInvisibleTextOperator(bytes);
+
+    console.log(`Content stream contains literal "3 Tr" (after inflating): ${hasInvisibleOp}`);
+    if (!hasInvisibleOp) {
+      console.error("✗ FAILED: no true invisible-text (Tr 3) operator found — may have regressed to an opacity-based fake.");
+      failed = true;
+    } else {
+      console.log("✓ The OCR text layer uses the real PDF invisible-text rendering mode, not alpha-fade.");
+    }
+    await context.close();
+  }
+
+  {
+    console.log(`\n=== searchable PDF: multi-page PDF -> one PDF, correct pages and per-page text ===`);
+    const pdfFixture = manifest.find((f) => f.name === "sample-multipage");
+    const context = await browser.newContext();
+    const page = await context.newPage();
+    page.on("pageerror", (e) => console.error("[pageerror]", String(e)));
+
+    await page.goto(`${origin}/index.html`, { waitUntil: "load" });
+    await page.setInputFiles("#file-input", `${FIXTURE_DIR}${pdfFixture.file}`);
+    await waitForRunEnabled(page, { timeoutMs: 20000 });
+    await page.click("#run");
+    await waitForStatus(page, (s) => s === "Done.", { timeoutMs: 60000, label: "the run to finish" });
+    await page.selectOption("#output-format", "pdf");
+    const [download] = await Promise.all([page.waitForEvent("download"), page.click("#download")]);
+    const bytes = new Uint8Array(readFileSync(await download.path()));
+    const pages = await readPdfPagesText(bytes);
+    const threshold = THRESHOLDS[pdfFixture.name];
+
+    let allOk = pages.length === pdfFixture.expectedPages.length;
+    pdfFixture.expectedPages.forEach((expected, i) => {
+      const accuracy = pages[i] ? wordAccuracy(expected, pages[i]) : 0;
+      const ok = accuracy >= threshold;
+      allOk &&= ok;
+      console.log(`  page ${i + 1}: ${(accuracy * 100).toFixed(1)}% ${ok ? "✓" : "✗"} — ${JSON.stringify(pages[i])}`);
+    });
+    if (!allOk) {
+      console.error("✗ FAILED: the multi-page searchable PDF has the wrong page count or lost accuracy per page.");
+      failed = true;
+    } else {
+      console.log("✓ A multi-page PDF downloads as one PDF, each page's real text genuinely extractable, in order.");
+    }
+    await context.close();
+  }
+
+  {
+    console.log(`\n=== searchable PDF: corrupt image degrades to a placeholder page, not a lost/aborted document ===`);
+    const invoiceFixture = manifest.find((f) => f.name === "sample-invoice");
+    const tableFixture = manifest.find((f) => f.name === "table");
+    const context = await browser.newContext();
+    const page = await context.newPage();
+    page.on("pageerror", (e) => console.error("[pageerror]", String(e)));
+
+    await page.goto(`${origin}/index.html`, { waitUntil: "load" });
+    await page.setInputFiles("#file-input", [
+      `${FIXTURE_DIR}${invoiceFixture.file}`,
+      `${FIXTURE_DIR}corrupt-image.png`,
+      `${FIXTURE_DIR}${tableFixture.file}`,
+    ]);
+    await page.click("#run");
+    await waitForStatus(page, (s) => s === "Done.", { timeoutMs: 30000, label: "the run to finish" });
+    await page.selectOption("#output-format", "pdf");
+    const [download] = await Promise.all([page.waitForEvent("download"), page.click("#download")]);
+    const zipBytes = new Uint8Array(readFileSync(await download.path()));
+    const entries = unzipSync(zipBytes);
+    const names = Object.keys(entries).sort();
+    const corruptPages = entries["corrupt-image.pdf"] ? await readPdfPagesText(entries["corrupt-image.pdf"]) : null;
+
+    console.log(`Zip entries: ${JSON.stringify(names)}`);
+    console.log(`corrupt-image.pdf page count: ${corruptPages?.length}, magic: ${entries["corrupt-image.pdf"] ? String.fromCharCode(...entries["corrupt-image.pdf"].subarray(0, 4)) : "n/a"}`);
+
+    // This fixture (a genuinely truncated 30-byte PNG — see corruptImageFixture's
+    // history in the per-file-failure test above) is confirmed to also fail
+    // pdf-lib's embedPng(), not just Tesseract's recognize() — checked directly
+    // (`PDFDocument.create().embedPng(readFileSync(...))` throws
+    // "Invalid typed array length: 0") before writing this assertion, not assumed.
+    const ok = names.length === 3 && names.includes("corrupt-image.pdf")
+      && entries["corrupt-image.pdf"][0] === 0x25 // "%" — still a real, openable PDF
+      && corruptPages?.length === 1;
+    if (!ok) {
+      console.error("✗ FAILED: a corrupt source image should still produce a valid placeholder PDF page, not break the export.");
+      failed = true;
+    } else {
+      console.log("✓ The corrupt image still produced a real, valid PDF page (a placeholder) instead of losing the document or aborting the export.");
+    }
+    await context.close();
+  }
+
+  {
+    console.log(`\n=== searchable PDF: a word outside WinAnsi doesn't crash the whole export ===`);
+    // Real Tesseract almost never emits a genuinely out-of-WinAnsi
+    // character on this project's own (English) fixtures, so this targets
+    // pdf-export.js directly with synthetic word data containing one —
+    // the same targeted-fault-injection spirit as the PDF page-render
+    // failure test above (a monkey-patched canvas.getContext, not a
+    // naturally-corrupt fixture), just injecting bad *data* instead of a
+    // thrown exception.
+    const invoiceFixture = manifest.find((f) => f.name === "sample-invoice");
+    const context = await browser.newContext();
+    const page = await context.newPage();
+    page.on("pageerror", (e) => console.error("[pageerror]", String(e)));
+
+    await page.goto(`${origin}/index.html`, { waitUntil: "load" });
+    const imageB64 = readFileSync(`${FIXTURE_DIR}${invoiceFixture.file}`).toString("base64");
+    const pdfB64 = await page.evaluate(async ({ imageB64, expectedText }) => {
+      const { buildSearchablePdfBlob } = await import("./pdf-export.js");
+      const bytes = Uint8Array.from(atob(imageB64), (c) => c.charCodeAt(0));
+      const file = new File([bytes], "sample-invoice.png", { type: "image/png" });
+      const words = [
+        { text: expectedText, bbox: { x0: 23, y0: 58, x1: 564, y1: 84 }, confidence: 95 },
+        // Cyrillic and CJK are both entirely outside WinAnsi encoding —
+        // font.encodeText() must throw on this specific word.
+        { text: "привет日本語", bbox: { x0: 23, y0: 100, x1: 200, y1: 120 }, confidence: 50 },
+      ];
+      const blob = await buildSearchablePdfBlob([{ file, words }]);
+      const buf = await blob.arrayBuffer();
+      let binary = "";
+      for (const b of new Uint8Array(buf)) binary += String.fromCharCode(b);
+      return btoa(binary);
+    }, { imageB64, expectedText: invoiceFixture.expectedText });
+
+    const bytes = Uint8Array.from(atob(pdfB64), (c) => c.charCodeAt(0));
+    const magic = String.fromCharCode(...bytes.subarray(0, 4));
+    const pages = await readPdfPagesText(bytes);
+    const ok = magic === "%PDF" && pages.length === 1 && pages[0].includes(invoiceFixture.expectedText);
+    console.log(`magic: ${JSON.stringify(magic)}, page 1 text: ${JSON.stringify(pages[0])}`);
+    if (!ok) {
+      console.error("✗ FAILED: a single unencodable word crashed or corrupted the whole PDF export.");
+      failed = true;
+    } else {
+      console.log("✓ The unencodable word's invisible run was skipped; every other word on the page still exported correctly.");
+    }
+    await context.close();
+  }
+
+  {
+    console.log(`\n=== searchable PDF: switching format after a run doesn't rebuild the format already built ===`);
+    const invoiceFixture = manifest.find((f) => f.name === "sample-invoice");
+    const context = await browser.newContext();
+    const page = await context.newPage();
+    page.on("pageerror", (e) => console.error("[pageerror]", String(e)));
+
+    await page.goto(`${origin}/index.html`, { waitUntil: "load" });
+    await page.setInputFiles("#file-input", `${FIXTURE_DIR}${invoiceFixture.file}`);
+    await page.click("#run");
+    await waitForStatus(page, (s) => s === "Done.", { timeoutMs: 60000, label: "the run to finish" });
+
+    const [firstDocx] = await Promise.all([page.waitForEvent("download"), page.click("#download")]);
+    const firstDocxBytes = new Uint8Array(readFileSync(await firstDocx.path()));
+
+    await page.selectOption("#output-format", "pdf");
+    const [pdfDownload] = await Promise.all([page.waitForEvent("download"), page.click("#download")]);
+    const pdfBytes = new Uint8Array(readFileSync(await pdfDownload.path()));
+
+    await page.selectOption("#output-format", "docx");
+    const [secondDocx] = await Promise.all([page.waitForEvent("download"), page.click("#download")]);
+    const secondDocxBytes = new Uint8Array(readFileSync(await secondDocx.path()));
+
+    const identical = firstDocxBytes.length === secondDocxBytes.length
+      && firstDocxBytes.every((b, i) => b === secondDocxBytes[i]);
+    console.log(`First/second .docx byte length: ${firstDocxBytes.length}/${secondDocxBytes.length}, identical: ${identical}, pdf magic: ${String.fromCharCode(...pdfBytes.subarray(0, 4))}`);
+    if (!identical || pdfBytes[0] !== 0x25) {
+      console.error("✗ FAILED: switching formats and back produced different bytes for a format that was already built once.");
+      failed = true;
+    } else {
+      console.log("✓ Switching to PDF and back to .docx served the already-built .docx again, byte-identical — no wasteful/racy rebuild.");
+    }
+    await context.close();
+  }
+
   // --- Per-file OCR failure: a real corrupt image (test/fixtures/corrupt-image.png
   // — a genuinely truncated real PNG, not a synthetic empty file) mixed
   // into a batch with two good ones. Confirms the whole error-handling
@@ -971,6 +1222,68 @@ try {
       failed = true;
     } else {
       console.log(`✓ Cancelled cleanly after ${doneCount}/6 items; UI re-enabled promptly; .docx has real text for completed items and a real placeholder for cancelled ones.`);
+    }
+    await context.close();
+  }
+
+  // --- Same cancel scenario as directly above, but checked through the
+  // searchable-PDF format specifically: unlike .docx, this format embeds a
+  // real image per page even for a page that never got to run OCR, so it
+  // has a failure mode .docx literally cannot have (see the corrupt-image
+  // PDF test above) — cancelled pages must still exist in the output,
+  // with their real image and no text layer, not just a docx-style text
+  // placeholder. ---
+  {
+    console.log(`\n=== cancel: recognize-phase, partway through a 6-item batch, PDF format ===`);
+    const invoiceFixture = manifest.find((f) => f.name === "sample-invoice");
+    const manyPaths = Array.from({ length: 6 }, () => `${FIXTURE_DIR}${invoiceFixture.file}`);
+    const context = await browser.newContext();
+    const page = await context.newPage();
+    page.on("pageerror", (e) => console.error("[pageerror]", String(e)));
+
+    await page.goto(`${origin}/index.html`, { waitUntil: "load" });
+    await page.setInputFiles("#file-input", manyPaths);
+    await waitForRunEnabled(page, { timeoutMs: 10000 });
+    await page.click("#run");
+    await waitForStatus(page, (s) => s.includes("3 of 6"), { timeoutMs: 15000, label: "item 3 to start" });
+    await page.click("#cancel");
+    const status = await waitForStatus(page, (s) => s.startsWith("Cancelled"), { timeoutMs: 5000, label: "the cancelled status" });
+    const fileStatuses = await page.$$eval("#file-list .file-status", (els) => els.map((e) => e.textContent));
+    const doneCount = fileStatuses.filter((s) => s === "Done").length;
+
+    await page.selectOption("#output-format", "pdf");
+    const [download] = await Promise.all([page.waitForEvent("download"), page.click("#download")]);
+    const zipBytes = new Uint8Array(readFileSync(await download.path()));
+    const entries = unzipSync(zipBytes);
+    const names = Object.keys(entries).sort();
+    // All 6 pages produce their own numbered .pdf entry regardless of
+    // whether OCR reached them — the file itself was always available.
+    const expectedNames = Array.from({ length: 6 }, (_, i) => i === 0 ? "sample-invoice.pdf" : `sample-invoice (${i + 1}).pdf`).sort();
+    let completedWithText = 0;
+    let cancelledNoText = 0;
+    for (const [name, bytes] of Object.entries(entries)) {
+      const pages = await readPdfPagesText(bytes);
+      // Word-level check, not an exact-phrase match: pdf.js's
+      // getTextContent() sometimes emits its own extra whitespace-only
+      // items for a large horizontal gap between words, which combined
+      // with the join(" ") below can produce irregular spacing (e.g. two
+      // or three spaces between some words) — real, correctly-extracted
+      // text, just not byte-identical to the fixture's single-spaced
+      // expectedText. The single-image searchable-PDF test above already
+      // established this same word-level check for exactly this reason.
+      if (["Invoice", "88214", "942.50"].every((w) => pages[0]?.includes(w))) completedWithText += 1;
+      else if (pages[0] === "") cancelledNoText += 1;
+    }
+    console.log(`Status: ${JSON.stringify(status)}, entries: ${JSON.stringify(names)}`);
+    console.log(`Completed-with-text: ${completedWithText}, cancelled-with-no-text: ${cancelledNoText}`);
+
+    const ok = names.length === 6 && names.join(",") === expectedNames.join(",")
+      && completedWithText === doneCount && cancelledNoText === 6 - doneCount;
+    if (!ok) {
+      console.error("✗ FAILED: cancelled PDF export didn't preserve one page per item with the right text/no-text split.");
+      failed = true;
+    } else {
+      console.log(`✓ All 6 pages present (${doneCount} with real recognized text, ${6 - doneCount} with just the image, no text layer).`);
     }
     await context.close();
   }

@@ -246,6 +246,20 @@ h1 .grad {
   transition: color 0.15s ease, border-color 0.15s ease;
 }
 .btn-ghost:hover { color: var(--fg); border-color: var(--primary); }
+.btn-ghost:disabled { opacity: 0.5; cursor: not-allowed; }
+
+#output-format {
+  font-family: var(--font-body);
+  font-size: 0.82rem;
+  font-weight: 500;
+  color: var(--muted);
+  background: transparent;
+  border: 1px solid var(--card-border);
+  border-radius: 8px;
+  padding: 0.5rem 0.6rem;
+  cursor: pointer;
+}
+#output-format:disabled { opacity: 0.5; cursor: not-allowed; }
 
 /* ---- file list (populated by app.js: <li><img><span.file-name><span.file-status></li>) ---- */
 #file-list {
@@ -358,7 +372,7 @@ textarea#result {
   margin: 0 0 1rem;
 }
 
-.result-actions { display: flex; gap: 0.6rem; }
+.result-actions { display: flex; flex-wrap: wrap; gap: 0.6rem; }
 
 /* ---- footer ---- */
 footer {

@@ -53,6 +53,12 @@ canvases the accuracy fixtures use.
   is still a genuinely long-running operation — a real Cancel button now exists for it (see
   the "Scope, for now" section of the [README](../README.md)), rather than the "no pause or
   cancel at all" gap this paragraph originally described.
+- **Requesting word-level boxes costs nothing measurable.** The searchable-PDF export needs
+  `worker.recognize(file, {}, { blocks: true })` instead of a bare `recognize(file)` to get
+  per-word bounding boxes — measured directly against the large-photo fixture above (3 runs
+  each, median): 14,062ms without `blocks: true` vs. 14,096ms with it, a 0.2% difference, well
+  within run-to-run noise. `ESTIMATED_SECONDS_PER_ITEM` (`public/app.js`) doesn't need
+  adjusting on this evidence.
 
 ## PDF input
 
