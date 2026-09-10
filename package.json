@@ -39,7 +39,7 @@
     "fflate": "^0.8.3",
     "pdf-lib": "^1.17.1",
     "pdfjs-dist": "^6.3.289",
-    "playwright": "^1.62.1",
+    "playwright": "^1.63.0",
     "tesseract.js": "^7.0.0"
   }
 }
