@@ -35,11 +35,11 @@
     "@tesseract.js-data/por": "^1.0.0",
     "@tesseract.js-data/rus": "^1.0.0",
     "@tesseract.js-data/spa": "^1.0.0",
-    "docx": "^9.7.1",
+    "docx": "^9.8.1",
     "fflate": "^0.8.3",
     "pdf-lib": "^1.17.1",
     "pdfjs-dist": "^6.3.289",
-    "playwright": "^1.62.1",
+    "playwright": "^1.63.0",
     "tesseract.js": "^7.0.0"
   }
 }
